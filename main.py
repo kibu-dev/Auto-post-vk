@@ -26,7 +26,7 @@ def save_published(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def build_attachments(post):
-    """Собираем вложения (фото, видео и т.д.)"""
+    """Собираем вложения"""
     attachments = []
     for a in post.get("attachments", []):
         t = a["type"]
@@ -41,29 +41,6 @@ def build_attachments(post):
             attachments.append(attachment)
     return ",".join(attachments) if attachments else None
 
-def get_final_text(post):
-    """
-    Формируем текст поста:
-    - Если есть signer_id -> пользователь сам выбрал подпись, добавляем его имя
-    - Если нет -> аноним
-    """
-    text = post.get("text", "")
-    signer_id = post.get("signer_id")
-    
-    if signer_id and signer_id > 0:
-        # Пользователь захотел подписаться — получаем имя
-        try:
-            user = vk.users.get(user_ids=signer_id, fields="first_name,last_name")
-            if user:
-                name = f"{user[0]['first_name']} {user[0]['last_name']}"
-                return f"{text}\n\n— {name}"
-        except Exception as e:
-            print(f"Не удалось получить имя: {e}")
-            return f"{text}\n\n— Пользователь"
-    else:
-        # Анонимный пост
-        return f"{text}\n\n— Анонимно"
-
 # Инициализация
 vk_session = vk_api.VkApi(token=USER_TOKEN)
 vk = vk_session.get_api()
@@ -76,7 +53,7 @@ print(f"⏱ Интервал проверки: {CHECK_INTERVAL} сек.\n")
 
 while True:
     try:
-        # Получаем предложенные записи из сообщества
+        # Получаем предложенные записи
         response = vk.wall.get(
             owner_id=-GROUP_ID,
             filter="suggests",
@@ -88,25 +65,49 @@ while True:
         
         for post in items:
             post_id = post["id"]
+            from_id = post.get("from_id")  # ID автора предложки
+            signer_id = post.get("signer_id")  # Хочет ли подписаться (если есть - да)
             
             # Пропускаем уже опубликованные
             if post_id in published["published"]:
                 continue
             
             print(f"\n🆕 Новый пост #{post_id}")
-            print(f"👤 signer_id: {post.get('signer_id', 'Нет (аноним)')}")
+            print(f"📝 Автор предложки (from_id): {from_id}")
+            print(f"✍️ Подпись (signer_id): {signer_id if signer_id else 'Нет (аноним)'}")
             
-            # Формируем финальный текст
-            final_text = get_final_text(post)
+            # Формируем текст
+            text = post.get("text", "")
+            
+            # Логика подписи
+            if signer_id and signer_id > 0:
+                # Пользователь хочет подписаться
+                try:
+                    user = vk.users.get(user_ids=signer_id, fields="first_name,last_name")
+                    if user:
+                        name = f"{user[0]['first_name']} {user[0]['last_name']}"
+                        final_text = f"{text}\n\n— {name}"
+                        print(f"✅ Пост с подписью: {name}")
+                except Exception as e:
+                    print(f"❌ Не удалось получить имя: {e}")
+                    final_text = f"{text}\n\n— Пользователь"
+            else:
+                # Анонимный пост
+                final_text = f"{text}\n\n— Анонимно"
+                print(f"🔒 Анонимный пост")
+            
+            # Собираем вложения
             attachments = build_attachments(post)
             
             try:
-                # Публикуем
+                # Публикуем с указанием suggested_id (это важно!)
                 result = vk.wall.post(
                     owner_id=-GROUP_ID,
                     from_group=1,
                     message=final_text,
-                    attachments=attachments
+                    attachments=attachments,
+                    signed=1 if signer_id else 0,  # Указываем, нужна ли подпись
+                    suggested_id=post_id  # КЛЮЧЕВОЙ ПАРАМЕТР - удаляет из предложок!
                 )
                 
                 print(f"✅ Опубликовано! ID записи: {result['post_id']}")
@@ -123,6 +124,8 @@ while True:
                     print(f"Пост #{post_id} уже существует, пропускаем")
                     published["published"].append(post_id)
                     save_published(published)
+                elif "[100]" in str(e):
+                    print(f"⚠️ Неверные параметры, возможно проблема с suggested_id")
         
         time.sleep(CHECK_INTERVAL)
         

@@ -85,7 +85,6 @@ while True:
                 result = vk.wall.post(
                     owner_id=-GROUP_ID,
                     from_group=1,
-                    signed=1,
                     message=text,
                     attachments=attachments
                 )

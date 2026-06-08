@@ -74,16 +74,54 @@ def remove_keywords(text):
 
 
 def make_profile_link(user_id, first_name, last_name):
-    """
-    Формирует ссылку на профиль ВК
-    Пример: [id123456789|Иван Иванов]
-    Или просто ссылку: https://vk.com/id123456789
-    """
-    # Способ 1: Внутренняя ссылка ВК (работает в постах)
+    """Формирует ссылку на профиль ВК"""
     return f"[id{user_id}|{first_name} {last_name}]"
+
+
+def delete_suggestion(vk, group_id, suggestion_id, from_id):
+    """
+    Удаляет предложенную запись.
+    Пробует несколько способов.
+    """
+    print(f"🗑 Пытаемся удалить предложку #{suggestion_id}...")
     
-    # Альтернатива: обычная ссылка
-    # return f"https://vk.com/id{user_id}"
+    # Способ 1: Через метод execute (универсальный)
+    try:
+        code = f'''
+        var items = API.wall.getSuggestions({{"owner_id": -{group_id}, "count": 100}}).items;
+        for (var i = 0; i < items.length; i++) {{
+            if (items[i].id == {suggestion_id}) {{
+                API.wall.deleteSuggestion({{"owner_id": -{group_id}, "suggestion_id": {suggestion_id}}});
+                return "deleted";
+            }}
+        }}
+        return "not_found";
+        '''
+        result = vk.execute(code=code)
+        if result == "deleted":
+            print(f"   ✅ Предложка #{suggestion_id} удалена (через execute)")
+            return True
+    except Exception as e:
+        print(f"   ❌ Ошибка execute: {e}")
+    
+    # Способ 2: Через wall.delete с правильным owner_id
+    try:
+        vk.wall.delete(owner_id=-group_id, post_id=suggestion_id)
+        print(f"   ✅ Предложка #{suggestion_id} удалена (через wall.delete)")
+        return True
+    except Exception as e:
+        print(f"   ❌ Ошибка wall.delete: {e}")
+    
+    # Способ 3: Через from_id (автора)
+    try:
+        vk.wall.delete(owner_id=from_id, post_id=suggestion_id)
+        print(f"   ✅ Предложка #{suggestion_id} удалена (через from_id)")
+        return True
+    except Exception as e:
+        print(f"   ❌ Ошибка удаления через from_id: {e}")
+    
+    print(f"   ⚠️ НЕ УДАЛОСЬ удалить предложку #{suggestion_id}")
+    return False
 
 
 vk_session = vk_api.VkApi(token=USER_TOKEN)
@@ -95,7 +133,7 @@ print("🚀 БОТ ДЛЯ ПОДСЛУШАНО ЗАПУЩЕН")
 print(f"📌 Группа: -{GROUP_ID}")
 print(f"⏱ Интервал проверки: {CHECK_INTERVAL} сек.")
 print("🔑 Ключевые слова анонимности: анон, анонимно, аноним, #анон, #анонимно, #аноним")
-print("🔗 Подпись автора будет ссылкой на профиль ВК")
+print("🔗 Подпись автора — ссылка на профиль ВК")
 print("=" * 50 + "\n")
 
 while True:
@@ -134,6 +172,9 @@ while True:
             else:
                 # Пытаемся получить имя автора по from_id
                 author_name = None
+                first_name = ""
+                last_name = ""
+                
                 if from_id and from_id > 0:
                     try:
                         user = vk.users.get(user_ids=from_id, fields="first_name,last_name")
@@ -168,12 +209,8 @@ while True:
                 
                 print(f"✅ Пост опубликован! ID: {result['post_id']}")
                 
-                # Удаляем предложку
-                try:
-                    vk.wall.delete(owner_id=from_id, post_id=post_id)
-                    print(f"🗑 Предложка удалена")
-                except Exception as e:
-                    print(f"⚠️ Не удалось удалить предложку: {e}")
+                # УДАЛЯЕМ ПРЕДЛОЖКУ (улучшенная версия)
+                delete_suggestion(vk, GROUP_ID, post_id, from_id)
                 
                 published["published"].append(post_id)
                 save_published(published)

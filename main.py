@@ -73,6 +73,19 @@ def remove_keywords(text):
     return cleaned
 
 
+def make_profile_link(user_id, first_name, last_name):
+    """
+    Формирует ссылку на профиль ВК
+    Пример: [id123456789|Иван Иванов]
+    Или просто ссылку: https://vk.com/id123456789
+    """
+    # Способ 1: Внутренняя ссылка ВК (работает в постах)
+    return f"[id{user_id}|{first_name} {last_name}]"
+    
+    # Альтернатива: обычная ссылка
+    # return f"https://vk.com/id{user_id}"
+
+
 vk_session = vk_api.VkApi(token=USER_TOKEN)
 vk = vk_session.get_api()
 published = load_published()
@@ -82,6 +95,7 @@ print("🚀 БОТ ДЛЯ ПОДСЛУШАНО ЗАПУЩЕН")
 print(f"📌 Группа: -{GROUP_ID}")
 print(f"⏱ Интервал проверки: {CHECK_INTERVAL} сек.")
 print("🔑 Ключевые слова анонимности: анон, анонимно, аноним, #анон, #анонимно, #аноним")
+print("🔗 Подпись автора будет ссылкой на профиль ВК")
 print("=" * 50 + "\n")
 
 while True:
@@ -98,7 +112,7 @@ while True:
         
         for post in items:
             post_id = post["id"]
-            from_id = post.get("from_id")  # ID автора предложки — ВОТ ОН!
+            from_id = post.get("from_id")
             
             # Пропускаем уже опубликованные
             if post_id in published["published"]:
@@ -124,14 +138,18 @@ while True:
                     try:
                         user = vk.users.get(user_ids=from_id, fields="first_name,last_name")
                         if user and len(user) > 0:
-                            author_name = f"{user[0]['first_name']} {user[0]['last_name']}"
+                            first_name = user[0].get('first_name', '')
+                            last_name = user[0].get('last_name', '')
+                            author_name = f"{first_name} {last_name}".strip()
                             print(f"✅ Получено имя автора: {author_name}")
                     except Exception as e:
                         print(f"⚠️ Ошибка получения имени: {e}")
                 
-                if author_name:
-                    final_text = f"{cleaned_text}\n\n© {author_name}"
-                    print(f"✍️ ПОДПИСАНО: {author_name}")
+                if author_name and from_id:
+                    # СОЗДАЕМ ССЫЛКУ на профиль ВК
+                    profile_link = make_profile_link(from_id, first_name, last_name)
+                    final_text = f"{cleaned_text}\n\n© {profile_link}"
+                    print(f"✍️ ПОДПИСАНО со ссылкой: {profile_link}")
                 else:
                     final_text = f"{cleaned_text}\n\n— Анонимно"
                     print(f"🔒 АНОНИМНО (имя не определено)")

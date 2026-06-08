@@ -63,6 +63,7 @@ while True:
                 result = vk.wall.post(
                     owner_id=-GROUP_ID,
                     from_group=1,
+                    signed=1,
                     post_id=post_id
                 )
 

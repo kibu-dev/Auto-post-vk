@@ -46,31 +46,31 @@ def build_attachments(post):
     return ",".join(attachments) if attachments else None
 
 
-def check_anonymous_keywords(text):
-    """
-    Проверяет наличие ключевых слов анонимности
-    Возвращает (очищенный_текст, is_anonymous)
-    """
+def contains_anonymous_keyword(text):
+    """Проверяет, есть ли в тексте ключевое слово анонимности"""
     keywords = [
         "анон", "анонимно", "аноним",
         "#анон", "#анонимно", "#аноним"
     ]
-    
-    original_text = text
-    is_anonymous = False
-    
     for keyword in keywords:
-        if re.search(r'\b' + re.escape(keyword) + r'\b', original_text, re.IGNORECASE):
-            is_anonymous = True
-            # Удаляем ключевое слово
-            original_text = re.sub(r'\b' + re.escape(keyword) + r'\b', '', original_text, flags=re.IGNORECASE)
-    
+        if re.search(r'\b' + re.escape(keyword) + r'\b', text, re.IGNORECASE):
+            return True
+    return False
+
+
+def remove_keywords(text):
+    """Удаляет ключевые слова анонимности из текста"""
+    keywords = [
+        "анон", "анонимно", "аноним",
+        "#анон", "#анонимно", "#аноним"
+    ]
+    cleaned = text
+    for keyword in keywords:
+        cleaned = re.sub(r'\b' + re.escape(keyword) + r'\b', '', cleaned, flags=re.IGNORECASE)
     # Чистим лишние пробелы
-    cleaned_text = re.sub(r'\s+', ' ', original_text).strip()
-    # Чистим лишние переносы
-    cleaned_text = re.sub(r'\n\s*\n', '\n\n', cleaned_text)
-    
-    return cleaned_text, is_anonymous
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
+    return cleaned
 
 
 vk_session = vk_api.VkApi(token=USER_TOKEN)
@@ -98,39 +98,40 @@ while True:
         
         for post in items:
             post_id = post["id"]
-            from_id = post.get("from_id")  # ID автора предложки
+            from_id = post.get("from_id")  # ID автора предложки — ВОТ ОН!
             
             # Пропускаем уже опубликованные
             if post_id in published["published"]:
                 continue
             
-            print(f"\n📝 Обработка поста #{post_id}")
-            print(f"👤 Автор предложки ID: {from_id}")
-            
             original_text = post.get("text", "")
-            print(f"📄 Текст: {original_text[:80]}...")
+            print(f"\n📝 Пост #{post_id}")
+            print(f"👤 Автор (from_id): {from_id}")
+            print(f"📄 Текст: {original_text[:80]}..." if original_text else "📄 Текст: (пусто)")
             
             # Проверяем ключевые слова анонимности
-            cleaned_text, is_anonymous = check_anonymous_keywords(original_text)
+            is_anonymous = contains_anonymous_keyword(original_text)
+            cleaned_text = remove_keywords(original_text)
             
-            # Формируем финальный текст с подписью
             if is_anonymous:
+                # Анонимный пост
                 final_text = f"{cleaned_text}\n\n— Анонимно"
-                print(f"🔒 ПОСТ БУДЕТ АНОНИМНЫМ")
+                print(f"🔒 АНОНИМНО (по ключевому слову)")
             else:
-                # Пытаемся получить имя автора
+                # Пытаемся получить имя автора по from_id
                 author_name = None
                 if from_id and from_id > 0:
                     try:
                         user = vk.users.get(user_ids=from_id, fields="first_name,last_name")
-                        if user:
+                        if user and len(user) > 0:
                             author_name = f"{user[0]['first_name']} {user[0]['last_name']}"
+                            print(f"✅ Получено имя автора: {author_name}")
                     except Exception as e:
-                        print(f"⚠️ Не удалось получить имя: {e}")
+                        print(f"⚠️ Ошибка получения имени: {e}")
                 
                 if author_name:
                     final_text = f"{cleaned_text}\n\n© {author_name}"
-                    print(f"✍️ ПОДПИСЬ АВТОРА: {author_name}")
+                    print(f"✍️ ПОДПИСАНО: {author_name}")
                 else:
                     final_text = f"{cleaned_text}\n\n— Анонимно"
                     print(f"🔒 АНОНИМНО (имя не определено)")
@@ -147,37 +148,23 @@ while True:
                     from_group=1
                 )
                 
-                print(f"✅ Пост опубликован! ID записи: {result['post_id']}")
+                print(f"✅ Пост опубликован! ID: {result['post_id']}")
                 
-                # УДАЛЯЕМ ПРЕДЛОЖКУ из очереди
+                # Удаляем предложку
                 try:
-                    # Пробуем удалить через owner_id автора
-                    vk.wall.delete(
-                        owner_id=from_id,
-                        post_id=post_id
-                    )
-                    print(f"🗑 Предложка #{post_id} удалена из очереди")
+                    vk.wall.delete(owner_id=from_id, post_id=post_id)
+                    print(f"🗑 Предложка удалена")
                 except Exception as e:
-                    # Если не получилось, пробуем удалить через группу
-                    try:
-                        vk.wall.delete(
-                            owner_id=-GROUP_ID,
-                            post_id=post_id
-                        )
-                        print(f"🗑 Предложка #{post_id} удалена (через группу)")
-                    except:
-                        print(f"⚠️ Не удалось удалить предложку, но пост опубликован")
+                    print(f"⚠️ Не удалось удалить предложку: {e}")
                 
-                # Сохраняем в архив
                 published["published"].append(post_id)
                 save_published(published)
-                
-                time.sleep(2)  # пауза между постами
+                time.sleep(2)
                 
             except vk_api.exceptions.ApiError as e:
-                print(f"❌ Ошибка публикации: {e}")
-                if "[214]" in str(e):  # дубликат
-                    print(f"Пост уже существует, пропускаем")
+                print(f"❌ Ошибка: {e}")
+                if "[214]" in str(e):
+                    print("Дубликат, пропускаем")
                     published["published"].append(post_id)
                     save_published(published)
         

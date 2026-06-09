@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 import vk_api
 from dotenv import load_dotenv
 
+# НОВОЕ: импорт базы данных
+import database as db
+
 load_dotenv()
 
 USER_TOKEN = os.getenv("USER_TOKEN")
@@ -210,6 +213,10 @@ def can_publish_now(last_publish_time, publish_interval):
     return time_since_last >= publish_interval
 
 
+# НОВОЕ: инициализируем базу данных при запуске
+db.init_db()
+print("✅ База данных инициализирована")
+
 vk_session = vk_api.VkApi(token=USER_TOKEN)
 vk = vk_session.get_api()
 published = load_published()
@@ -314,6 +321,10 @@ while True:
                 # Сохраняем в архив
                 published["published"].append(post_id)
                 save_published(published)
+                
+                # НОВОЕ: Сохраняем в базу данных для статистики и возможности удаления
+                db.add_post(from_id, result['post_id'], cleaned_text)
+                print(f"💾 Пост #{post_id} сохранен в БД")
                 
                 # Показываем время до следующей публикации
                 next_publish_in = publish_interval

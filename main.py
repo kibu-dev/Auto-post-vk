@@ -120,24 +120,22 @@ def get_posts_keyboard(posts):
     keyboard = VkKeyboard(one_time=True)
     for i, post in enumerate(posts[:10], 1):
         preview = post['text'][:25] + "..." if len(post['text']) > 25 else post['text']
-        keyboard.add_button(f"🗑 Пост #{post['post_id']}", color=VkKeyboardColor.SECONDARY, 
-                           payload={"post_id": post['post_id']})
+        keyboard.add_button(f"🗑 Пост #{post['post_id']}", color=VkKeyboardColor.SECONDARY)
         if i % 2 == 0 and i != len(posts[:10]):
             keyboard.add_line()
     keyboard.add_line()
-    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.PRIMARY, payload={"action": "back"})
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.PRIMARY)
     return keyboard
 
 def get_confirm_keyboard(post_id):
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("✅ Да", color=VkKeyboardColor.NEGATIVE, 
-                       payload={"action": "confirm_delete", "post_id": post_id})
-    keyboard.add_button("❌ Нет", color=VkKeyboardColor.SECONDARY, payload={"action": "cancel"})
+    keyboard.add_button("✅ Да, удалить", color=VkKeyboardColor.NEGATIVE)
+    keyboard.add_button("❌ Нет", color=VkKeyboardColor.SECONDARY)
     return keyboard
 
 def get_back_keyboard():
     keyboard = VkKeyboard(one_time=False)
-    keyboard.add_button("🔙 Назад в меню", color=VkKeyboardColor.PRIMARY, payload={"action": "back"})
+    keyboard.add_button("🔙 Назад в меню", color=VkKeyboardColor.PRIMARY)
     return keyboard
 
 # ========== ФУНКЦИИ ==========
@@ -230,7 +228,7 @@ def send_message(vk, user_id, text, keyboard=None):
         vk.messages.send(user_id=user_id, message=text, random_id=0, 
                         keyboard=keyboard.get_keyboard() if keyboard else None)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка отправки: {e}")
 
 # ========== ПУБЛИКАТОР ==========
 def run_publisher():
@@ -281,11 +279,13 @@ def run_publisher():
                 
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
-            print(f"Ошибка: {e}")
+            print(f"Ошибка публикатора: {e}")
             time.sleep(60)
 
 # ========== ЛС БОТ ==========
 waiting_support = set()
+last_message_text = {}  # Для хранения последнего сообщения пользователя
+last_message_post_id = {}  # Для хранения post_id при удалении
 
 def run_messenger():
     vk_session = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131')
@@ -298,7 +298,6 @@ def run_messenger():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
             text = event.text.lower().strip()
-            payload = event.payload
             
             # Проверка бана
             if is_user_banned(user_id):
@@ -312,7 +311,7 @@ def run_messenger():
                     send_message(vk, user_id, "Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    send_message(vk, ADMIN_ID, f"Поддержка от {user_id}: {text}")
+                    send_message(vk, ADMIN_ID, f"Поддержка от {user_id}: {event.text}")
                     send_message(vk, user_id, "✅ Отправлено!", get_main_keyboard())
                 continue
             
@@ -346,28 +345,59 @@ def run_messenger():
                 if not posts:
                     send_message(vk, user_id, "Нет постов для удаления.", get_main_keyboard())
                 else:
-                    send_message(vk, user_id, "Выберите пост:", get_posts_keyboard(posts))
+                    # Отправляем клавиатуру с постами
+                    keyboard = get_posts_keyboard(posts)
+                    send_message(vk, user_id, "Выберите пост для удаления:", keyboard)
+                    # Сохраняем посты для этого пользователя
+                    last_message_post_id[user_id] = posts
             
             elif text == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
-                send_message(vk, user_id, "Напишите сообщение. /cancel для отмены.", get_back_keyboard())
+                send_message(vk, user_id, "Напишите сообщение администратору. /cancel для отмены.", get_back_keyboard())
             
-            elif payload:
-                import json as json_mod
-                p = json_mod.loads(payload) if isinstance(payload, str) else payload
-                if p.get("action") == "back":
-                    send_message(vk, user_id, "Главное меню:", get_main_keyboard())
-                elif p.get("action") == "confirm_delete":
-                    post_id = p.get("post_id")
-                    if get_post_author(post_id) == user_id:
-                        vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
-                        delete_user_post(user_id, post_id)
-                        send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
+            elif text == "🔙 назад в меню":
+                send_message(vk, user_id, "Главное меню:", get_main_keyboard())
+            
+            elif text == "✅ да, удалить" or text.startswith("✅ да"):
+                # Обработка подтверждения удаления
+                if user_id in last_message_post_id and last_message_post_id[user_id]:
+                    # Берем первый пост из списка
+                    posts_list = last_message_post_id[user_id]
+                    if posts_list:
+                        post_to_delete = posts_list[0]
+                        post_id = post_to_delete['post_id']
+                        if get_post_author(post_id) == user_id:
+                            try:
+                                vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+                                delete_user_post(user_id, post_id)
+                                send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
+                                last_message_post_id[user_id] = None
+                            except Exception as e:
+                                send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
+                        else:
+                            send_message(vk, user_id, "❌ Не ваш пост!", get_main_keyboard())
                     else:
-                        send_message(vk, user_id, "❌ Не ваш пост!", get_main_keyboard())
-                elif p.get("post_id"):
-                    send_message(vk, user_id, f"Удалить пост #{p['post_id']}?", 
-                                get_confirm_keyboard(p['post_id']))
+                        send_message(vk, user_id, "Нет постов для удаления.", get_main_keyboard())
+                else:
+                    send_message(vk, user_id, "Сначала выберите пост для удаления.", get_main_keyboard())
+            
+            elif text == "❌ нет":
+                send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
+                last_message_post_id[user_id] = None
+            
+            elif text.startswith("🗑 пост #"):
+                # Извлекаем ID поста из текста кнопки
+                try:
+                    post_num = text.split("#")[1].split()[0]
+                    post_id = int(post_num)
+                    if get_post_author(post_id) == user_id:
+                        last_message_post_id[user_id] = [{'post_id': post_id}]
+                        send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard(post_id))
+                    else:
+                        send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                except:
+                    send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
+            
             else:
                 send_message(vk, user_id, "Напишите 'Меню' для кнопок", get_main_keyboard())
 

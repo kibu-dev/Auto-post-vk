@@ -372,9 +372,26 @@ def run_publisher():
 
 # ========== ПОТОК ДЛЯ ОБРАБОТКИ ЛС ==========
 def run_messenger():
-    vk_session = vk_api.VkApi(token=GROUP_TOKEN)
+    # Используем токен сообщества с правильной версией API
+    vk_session = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131')
     vk = vk_session.get_api()
-    longpoll = VkLongPoll(vk_session)
+    
+    # Проверяем токен
+    try:
+        vk.messages.getConversations(count=1)
+        print("✅ ЛС бот успешно авторизован")
+    except Exception as e:
+        print(f"❌ Ошибка авторизации ЛС бота: {e}")
+        print("Проверь GROUP_TOKEN и права на сообщения")
+        return
+    
+    # LongPoll для сообщества - обязательно указываем group_id!
+    try:
+        longpoll = VkLongPoll(vk_session, group_id=GROUP_ID)
+        print("✅ LongPoll для сообщества подключен")
+    except Exception as e:
+        print(f"❌ Ошибка подключения LongPoll: {e}")
+        return
     
     waiting_for_support = set()
     
@@ -389,28 +406,36 @@ def run_messenger():
                 message_text = event.text.lower().strip() if event.text else ""
                 payload = event.payload
                 
+                # Проверка подписки
                 if not check_group_subscription(vk, user_id):
                     send_message(vk, user_id, 
                         f"❌ Вы не подписаны на сообщество!\nhttps://vk.com/club{GROUP_ID}",
                         get_back_keyboard())
                     continue
                 
+                # Проверка бана
                 if is_user_banned(user_id):
                     send_message(vk, user_id, "🚫 Вы забанены за нарушение правил.", get_back_keyboard())
                     continue
                 
+                # Режим ожидания сообщения в поддержку
                 if user_id in waiting_for_support:
                     if message_text == "/cancel":
                         waiting_for_support.discard(user_id)
                         send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                     else:
                         waiting_for_support.discard(user_id)
-                        user_info = vk.users.get(user_ids=user_id)[0]
-                        admin_msg = f"📨 Поддержка\nОт: {user_info['first_name']} (id{user_id})\nТекст: {event.text}"
-                        send_to_admin(vk, admin_msg)
-                        send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
+                        try:
+                            user_info = vk.users.get(user_ids=user_id)[0]
+                            admin_msg = f"📨 Поддержка\nОт: {user_info['first_name']} (id{user_id})\nТекст: {event.text}"
+                            send_to_admin(vk, admin_msg)
+                            send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
+                        except Exception as e:
+                            print(f"Ошибка отправки в поддержку: {e}")
+                            send_message(vk, user_id, "❌ Ошибка отправки. Попробуйте позже.", get_main_keyboard())
                     continue
                 
+                # Обработка команд
                 if message_text in ["начать", "меню", "start"]:
                     stats = get_user_stats(user_id)
                     send_message(vk, user_id,
@@ -434,27 +459,40 @@ def run_messenger():
                     waiting_for_support.add(user_id)
                     send_message(vk, user_id, "📝 Напишите сообщение администратору. /cancel для отмены", get_back_keyboard())
                 
+                elif message_text == "🔙 назад в меню":
+                    send_message(vk, user_id, "Главное меню:", get_main_keyboard())
+                
+                # Обработка payload (нажатий на кнопки)
                 elif payload:
-                    if payload.get("action") == "back":
-                        send_message(vk, user_id, "Главное меню:", get_main_keyboard())
-                    elif payload.get("action") == "confirm_delete":
-                        post_id = payload.get("post_id")
-                        if get_post_author(post_id) == user_id:
-                            vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
-                            delete_user_post(user_id, post_id)
-                            send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
-                        else:
-                            send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
-                    elif payload.get("post_id"):
-                        post_id = payload.get("post_id")
-                        send_message(vk, user_id, 
-                            f"⚠️ Удалить пост #{post_id}?", 
-                            get_confirm_keyboard(post_id))
+                    import json as json_module
+                    try:
+                        payload_data = json_module.loads(payload) if isinstance(payload, str) else payload
+                        if payload_data.get("action") == "back":
+                            send_message(vk, user_id, "Главное меню:", get_main_keyboard())
+                        elif payload_data.get("action") == "confirm_delete":
+                            post_id = payload_data.get("post_id")
+                            if get_post_author(post_id) == user_id:
+                                try:
+                                    vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+                                    delete_user_post(user_id, post_id)
+                                    send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
+                                except Exception as e:
+                                    send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
+                            else:
+                                send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                        elif payload_data.get("post_id"):
+                            post_id = payload_data.get("post_id")
+                            send_message(vk, user_id, 
+                                f"⚠️ Удалить пост #{post_id}?", 
+                                get_confirm_keyboard(post_id))
+                    except:
+                        pass
                 else:
-                    send_message(vk, user_id, "❌ Неизвестная команда", get_main_keyboard())
+                    send_message(vk, user_id, "❌ Неизвестная команда. Нажмите на кнопки.", get_main_keyboard())
                     
         except Exception as e:
-            print(f"Ошибка ЛС бота: {e}")
+            print(f"Ошибка обработки сообщения: {e}")
+            traceback.print_exc()
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":

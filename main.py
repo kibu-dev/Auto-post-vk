@@ -80,10 +80,16 @@ def get_user_stats(user_id):
         return dict(stats)
     return {"posts_count": 0, "last_post_date": None, "total_chars": 0}
 
-def get_user_posts(user_id):
+def get_user_posts(user_id, limit=10):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    posts = conn.execute('SELECT post_id, published_date, text FROM user_posts WHERE user_id = ? AND is_deleted = 0 ORDER BY published_date DESC', (user_id,)).fetchall()
+    posts = conn.execute('''
+        SELECT post_id, published_date, text 
+        FROM user_posts 
+        WHERE user_id = ? AND is_deleted = 0 
+        ORDER BY published_date DESC 
+        LIMIT ?
+    ''', (user_id, limit)).fetchall()
     conn.close()
     return [dict(p) for p in posts]
 
@@ -110,7 +116,6 @@ def get_main_keyboard():
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("📊 Моя статистика", color=VkKeyboardColor.PRIMARY)
     keyboard.add_line()
-    keyboard.add_button("📝 Мои посты", color=VkKeyboardColor.SECONDARY)
     keyboard.add_button("🗑 Удалить мой пост", color=VkKeyboardColor.NEGATIVE)
     keyboard.add_line()
     keyboard.add_button("🆘 Написать в поддержку", color=VkKeyboardColor.SECONDARY)
@@ -118,16 +123,16 @@ def get_main_keyboard():
 
 def get_posts_keyboard(posts):
     keyboard = VkKeyboard(one_time=True)
-    for i, post in enumerate(posts[:10], 1):
-        preview = post['text'][:25] + "..." if len(post['text']) > 25 else post['text']
-        keyboard.add_button(f"🗑 Пост #{post['post_id']}", color=VkKeyboardColor.SECONDARY)
-        if i % 2 == 0 and i != len(posts[:10]):
+    for i, post in enumerate(posts, 1):
+        preview = post['text'][:30] + "..." if len(post['text']) > 30 else post['text']
+        keyboard.add_button(f"🗑 Пост #{post['post_id']}: {preview}", color=VkKeyboardColor.SECONDARY)
+        if i % 2 == 0 and i != len(posts):
             keyboard.add_line()
     keyboard.add_line()
     keyboard.add_button("🔙 Назад", color=VkKeyboardColor.PRIMARY)
     return keyboard
 
-def get_confirm_keyboard(post_id):
+def get_confirm_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("✅ Да, удалить", color=VkKeyboardColor.NEGATIVE)
     keyboard.add_button("❌ Нет", color=VkKeyboardColor.SECONDARY)
@@ -136,6 +141,11 @@ def get_confirm_keyboard(post_id):
 def get_back_keyboard():
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("🔙 Назад в меню", color=VkKeyboardColor.PRIMARY)
+    return keyboard
+
+def get_cancel_keyboard():
+    keyboard = VkKeyboard(one_time=False)
+    keyboard.add_button("🔙 Отмена", color=VkKeyboardColor.SECONDARY)
     return keyboard
 
 # ========== ФУНКЦИИ ==========
@@ -161,16 +171,22 @@ def save_bans(bans):
     with open(BAN_FILE, "w") as f:
         json.dump(bans, f)
 
-def is_user_banned(user_id):
+def get_ban_info(user_id):
     bans = load_bans()
     if str(user_id) not in bans:
-        return False
+        return None
     ban_until = datetime.fromisoformat(bans[str(user_id)]["until"])
     if datetime.now() > ban_until:
         del bans[str(user_id)]
         save_bans(bans)
-        return False
-    return True
+        return None
+    remaining = ban_until - datetime.now()
+    hours_left = int(remaining.total_seconds() // 3600)
+    minutes_left = int((remaining.total_seconds() % 3600) // 60)
+    return {"hours": hours_left, "minutes": minutes_left, "reason": bans[str(user_id)]["reason"]}
+
+def is_user_banned(user_id):
+    return get_ban_info(user_id) is not None
 
 def ban_user(user_id, reason):
     bans = load_bans()
@@ -212,16 +228,23 @@ def build_attachments(post):
         obj = a[t]
         owner_id = obj.get("owner_id")
         item_id = obj.get("id")
+        access_key = obj.get("access_key", "")
         if owner_id and item_id:
-            attachments.append(f"{t}{owner_id}_{item_id}")
+            attachment = f"{t}{owner_id}_{item_id}"
+            if access_key:
+                attachment += f"_{access_key}"
+            attachments.append(attachment)
     return ",".join(attachments) if attachments else None
 
 def get_user_name(vk, user_id):
     try:
-        user = vk.users.get(user_ids=user_id)
+        user = vk.users.get(user_ids=user_id, fields="first_name,last_name")
         return user[0]['first_name'], user[0]['last_name']
     except:
         return "Пользователь", ""
+
+def make_profile_link(user_id, first_name, last_name):
+    return f"[id{user_id}|{first_name} {last_name}]"
 
 def send_message(vk, user_id, text, keyboard=None):
     try:
@@ -229,6 +252,23 @@ def send_message(vk, user_id, text, keyboard=None):
                         keyboard=keyboard.get_keyboard() if keyboard else None)
     except Exception as e:
         print(f"Ошибка отправки: {e}")
+
+def send_to_admin(vk, user_id, message_text):
+    if ADMIN_ID:
+        try:
+            user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")
+            user_name = f"{user_info[0]['first_name']} {user_info[0]['last_name']}"
+            user_link = make_profile_link(user_id, user_info[0]['first_name'], user_info[0]['last_name'])
+            
+            admin_msg = f"📨 <b>Новое сообщение в поддержку</b>\n\n"
+            admin_msg += f"👤 От: {user_link}\n"
+            admin_msg += f"🆔 ID: {user_id}\n"
+            admin_msg += f"💬 Сообщение:\n{message_text}\n\n"
+            admin_msg += f"✏️ Чтобы ответить, отправьте сообщение этому пользователю от имени группы"
+            
+            vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
 
 # ========== ПУБЛИКАТОР ==========
 def run_publisher():
@@ -265,7 +305,8 @@ def run_publisher():
                     final = f"{clean_text}\n\n— Анонимно"
                 else:
                     first, last = get_user_name(vk, uid)
-                    final = f"{clean_text}\n\n© {first} {last}"
+                    profile_link = make_profile_link(uid, first, last)
+                    final = f"{clean_text}\n\n© {profile_link}"
                 
                 attachments = build_attachments(post)
                 result = vk.wall.post(owner_id=-GROUP_ID, message=final, attachments=attachments, from_group=1)
@@ -284,7 +325,7 @@ def run_publisher():
 
 # ========== ЛС БОТ ==========
 waiting_support = set()
-selected_post_for_delete = {}  # Храним выбранный пост для удаления
+selected_post_for_delete = {}
 
 def run_messenger():
     # Сессия для сообщений (токен сообщества)
@@ -305,19 +346,20 @@ def run_messenger():
             text = event.text.lower().strip()
             
             # Проверка бана
-            if is_user_banned(user_id):
-                send_message(vk, user_id, "🚫 Вы забанены.")
+            ban_info = get_ban_info(user_id)
+            if ban_info:
+                send_message(vk, user_id, f"🚫 Вы забанены на {ban_info['hours']}ч {ban_info['minutes']}м\nПричина: {ban_info['reason']}")
                 continue
             
             # Режим поддержки
             if user_id in waiting_support:
-                if text == "/cancel":
+                if text == "🔙 отмена" or text == "/cancel":
                     waiting_support.discard(user_id)
-                    send_message(vk, user_id, "Отменено.", get_main_keyboard())
+                    send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    send_message(vk, ADMIN_ID, f"Поддержка от {user_id}: {event.text}")
-                    send_message(vk, user_id, "✅ Отправлено!", get_main_keyboard())
+                    send_to_admin(vk, user_id, event.text)
+                    send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
             
             # Команды
@@ -329,33 +371,34 @@ def run_messenger():
             
             elif text == "📊 моя статистика":
                 stats = get_user_stats(user_id)
-                send_message(vk, user_id,
-                    f"📊 Постов: {stats['posts_count']}\n📝 Символов: {stats['total_chars']}",
-                    get_main_keyboard())
-            
-            elif text == "📝 мои посты":
-                posts = get_user_posts(user_id)
-                if not posts:
-                    send_message(vk, user_id, "Нет постов.", get_main_keyboard())
+                ban_info = get_ban_info(user_id)
+                
+                msg = f"📊 <b>Ваша статистика</b>\n\n"
+                msg += f"📝 Опубликовано постов: {stats['posts_count']}\n"
+                
+                if ban_info:
+                    msg += f"🚫 <b>Блокировка активна!</b>\n"
+                    msg += f"   Осталось: {ban_info['hours']}ч {ban_info['minutes']}м\n"
+                    msg += f"   Причина: {ban_info['reason']}"
                 else:
-                    msg = "📝 Ваши посты:\n\n"
-                    for i, p in enumerate(posts[:5], 1):
-                        date = p['published_date'][:16] if p['published_date'] else "дата неизвестна"
-                        preview = p['text'][:40] + "..." if len(p['text']) > 40 else p['text']
-                        msg += f"{i}. Пост #{p['post_id']} ({date})\n   {preview}\n\n"
-                    send_message(vk, user_id, msg, get_main_keyboard())
+                    msg += f"✅ <b>Блокировки отсутствуют</b>"
+                
+                send_message(vk, user_id, msg, get_main_keyboard())
             
             elif text == "🗑 удалить мой пост":
-                posts = get_user_posts(user_id)
+                posts = get_user_posts(user_id, limit=10)
                 if not posts:
-                    send_message(vk, user_id, "Нет постов для удаления.", get_main_keyboard())
+                    send_message(vk, user_id, "📭 У вас нет опубликованных постов.", get_main_keyboard())
                 else:
                     keyboard = get_posts_keyboard(posts)
-                    send_message(vk, user_id, "Выберите пост для удаления:", keyboard)
+                    send_message(vk, user_id, f"📋 У вас {len(posts)} пост(ов).\nВыберите какой удалить:", keyboard)
             
             elif text == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
-                send_message(vk, user_id, "Напишите сообщение администратору. /cancel для отмены.", get_back_keyboard())
+                send_message(vk, user_id, "📝 Напишите ваше сообщение администратору.\nНажмите «Отмена» чтобы вернуться в меню.", get_cancel_keyboard())
+            
+            elif text == "🔙 отмена":
+                send_message(vk, user_id, "Главное меню:", get_main_keyboard())
             
             elif text == "🔙 назад в меню":
                 selected_post_for_delete.pop(user_id, None)
@@ -370,7 +413,6 @@ def run_messenger():
                     post_id = selected_post_for_delete[user_id]
                     if get_post_author(post_id) == user_id:
                         try:
-                            # Используем ТОКЕН ПОЛЬЗОВАТЕЛЯ для удаления
                             vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
                             delete_user_post(user_id, post_id)
                             send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
@@ -383,14 +425,17 @@ def run_messenger():
                     send_message(vk, user_id, "Сначала выберите пост для удаления.", get_main_keyboard())
             
             elif text.startswith("🗑 пост #"):
-                # Извлекаем ID поста
                 try:
-                    post_id = int(text.split("#")[1].split()[0])
-                    if get_post_author(post_id) == user_id:
-                        selected_post_for_delete[user_id] = post_id
-                        send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard(post_id))
+                    match = re.search(r'#(\d+)', text)
+                    if match:
+                        post_id = int(match.group(1))
+                        if get_post_author(post_id) == user_id:
+                            selected_post_for_delete[user_id] = post_id
+                            send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard())
+                        else:
+                            send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                     else:
-                        send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                        send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
                 except:
                     send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
             

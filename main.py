@@ -284,12 +284,17 @@ def run_publisher():
 
 # ========== ЛС БОТ ==========
 waiting_support = set()
-last_message_text = {}  # Для хранения последнего сообщения пользователя
-last_message_post_id = {}  # Для хранения post_id при удалении
+selected_post_for_delete = {}  # Храним выбранный пост для удаления
 
 def run_messenger():
+    # Сессия для сообщений (токен сообщества)
     vk_session = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131')
     vk = vk_session.get_api()
+    
+    # Сессия для удаления (токен пользователя/админа)
+    vk_user_session = vk_api.VkApi(token=USER_TOKEN, api_version='5.131')
+    vk_user = vk_user_session.get_api()
+    
     longpoll = VkLongPoll(vk_session, group_id=GROUP_ID)
     
     print("🤖 ЛС бот запущен")
@@ -345,53 +350,44 @@ def run_messenger():
                 if not posts:
                     send_message(vk, user_id, "Нет постов для удаления.", get_main_keyboard())
                 else:
-                    # Отправляем клавиатуру с постами
                     keyboard = get_posts_keyboard(posts)
                     send_message(vk, user_id, "Выберите пост для удаления:", keyboard)
-                    # Сохраняем посты для этого пользователя
-                    last_message_post_id[user_id] = posts
             
             elif text == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
                 send_message(vk, user_id, "Напишите сообщение администратору. /cancel для отмены.", get_back_keyboard())
             
             elif text == "🔙 назад в меню":
+                selected_post_for_delete.pop(user_id, None)
                 send_message(vk, user_id, "Главное меню:", get_main_keyboard())
             
-            elif text == "✅ да, удалить" or text.startswith("✅ да"):
-                # Обработка подтверждения удаления
-                if user_id in last_message_post_id and last_message_post_id[user_id]:
-                    # Берем первый пост из списка
-                    posts_list = last_message_post_id[user_id]
-                    if posts_list:
-                        post_to_delete = posts_list[0]
-                        post_id = post_to_delete['post_id']
-                        if get_post_author(post_id) == user_id:
-                            try:
-                                vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
-                                delete_user_post(user_id, post_id)
-                                send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
-                                last_message_post_id[user_id] = None
-                            except Exception as e:
-                                send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
-                        else:
-                            send_message(vk, user_id, "❌ Не ваш пост!", get_main_keyboard())
+            elif text == "❌ нет":
+                selected_post_for_delete.pop(user_id, None)
+                send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
+            
+            elif text == "✅ да, удалить":
+                if user_id in selected_post_for_delete:
+                    post_id = selected_post_for_delete[user_id]
+                    if get_post_author(post_id) == user_id:
+                        try:
+                            # Используем ТОКЕН ПОЛЬЗОВАТЕЛЯ для удаления
+                            vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+                            delete_user_post(user_id, post_id)
+                            send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
+                            selected_post_for_delete.pop(user_id, None)
+                        except Exception as e:
+                            send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
                     else:
-                        send_message(vk, user_id, "Нет постов для удаления.", get_main_keyboard())
+                        send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                 else:
                     send_message(vk, user_id, "Сначала выберите пост для удаления.", get_main_keyboard())
             
-            elif text == "❌ нет":
-                send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
-                last_message_post_id[user_id] = None
-            
             elif text.startswith("🗑 пост #"):
-                # Извлекаем ID поста из текста кнопки
+                # Извлекаем ID поста
                 try:
-                    post_num = text.split("#")[1].split()[0]
-                    post_id = int(post_num)
+                    post_id = int(text.split("#")[1].split()[0])
                     if get_post_author(post_id) == user_id:
-                        last_message_post_id[user_id] = [{'post_id': post_id}]
+                        selected_post_for_delete[user_id] = post_id
                         send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard(post_id))
                     else:
                         send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())

@@ -21,14 +21,30 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
 PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "1800"))
 BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
+DAILY_POST_LIMIT = int(os.getenv("DAILY_POST_LIMIT", "10"))
 
 PUBLISHED_FILE = "published.json"
 BAN_FILE = "bans.json"
+USER_LIMITS_FILE = "user_limits.json"
 
 # Спам-фильтры
 FORBIDDEN_WORDS = ["реклама", "раскрутка", "накрутка", "магазин", "скидка", 
                    "заработок", "биткоин", "крипта", "услуги"]
-FORBIDDEN_LINKS = ["t.me", "telegram", "instagram", "wa.me", "whatsapp", "youtube"]
+
+# Функция для проверки любых ссылок
+def contains_any_link(text):
+    if not text:
+        return False
+    # Проверка на http://, https://, www., и просто домены
+    patterns = [
+        r'https?://[^\s]+',           # http:// или https://
+        r'www\.[^\s]+',               # www.
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'  # домен типа example.com
+    ]
+    for pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
 
 # ========== БАЗА ДАННЫХ ==========
 import sqlite3
@@ -41,7 +57,11 @@ def init_db():
             user_id INTEGER PRIMARY KEY,
             posts_count INTEGER DEFAULT 0,
             last_post_date TEXT,
-            total_chars INTEGER DEFAULT 0
+            total_chars INTEGER DEFAULT 0,
+            daily_posts INTEGER DEFAULT 0,
+            last_post_date DATE DEFAULT '',
+            temp_limit INTEGER DEFAULT 0,
+            temp_limit_until TEXT DEFAULT ''
         )
     ''')
     conn.execute('''
@@ -57,28 +77,69 @@ def init_db():
     conn.close()
 
 def add_post(user_id, post_id, text):
+    today = datetime.now().date().isoformat()
     conn = sqlite3.connect(DB_PATH)
     conn.execute('INSERT OR REPLACE INTO user_posts (post_id, user_id, published_date, text) VALUES (?, ?, ?, ?)',
                  (post_id, user_id, datetime.now().isoformat(), text[:500]))
     conn.execute('''
-        INSERT INTO user_stats (user_id, posts_count, last_post_date, total_chars)
-        VALUES (?, 1, ?, ?)
+        INSERT INTO user_stats (user_id, posts_count, last_post_date, total_chars, daily_posts, last_post_date)
+        VALUES (?, 1, ?, ?, 1, ?)
         ON CONFLICT(user_id) DO UPDATE SET
             posts_count = posts_count + 1,
             last_post_date = ?,
-            total_chars = total_chars + ?
-    ''', (user_id, datetime.now().isoformat(), len(text), datetime.now().isoformat(), len(text)))
+            total_chars = total_chars + ?,
+            daily_posts = CASE WHEN last_post_date = ? THEN daily_posts + 1 ELSE 1 END,
+            last_post_date = ?
+    ''', (user_id, datetime.now().isoformat(), len(text), today, datetime.now().isoformat(), len(text), today, today))
     conn.commit()
     conn.close()
 
 def get_user_stats(user_id):
+    today = datetime.now().date().isoformat()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     stats = conn.execute('SELECT * FROM user_stats WHERE user_id = ?', (user_id,)).fetchone()
     conn.close()
+    
+    result = {"posts_count": 0, "last_post_date": None, "total_chars": 0, "daily_posts": 0}
     if stats:
-        return dict(stats)
-    return {"posts_count": 0, "last_post_date": None, "total_chars": 0}
+        result = dict(stats)
+        # Сброс daily_posts если новый день
+        if stats['last_post_date'] != today:
+            result['daily_posts'] = 0
+    
+    # Проверяем временный лимит
+    temp_limit = get_temp_limit(user_id)
+    if temp_limit:
+        result['temp_limit'] = temp_limit['limit']
+        result['temp_limit_until'] = temp_limit['until']
+    else:
+        result['temp_limit'] = 0
+    
+    return result
+
+def get_temp_limit(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute('SELECT temp_limit, temp_limit_until FROM user_stats WHERE user_id = ?', (user_id,)).fetchone()
+    conn.close()
+    if row and row[0] > 0:
+        until = datetime.fromisoformat(row[1])
+        if datetime.now() < until:
+            return {"limit": row[0], "until": row[1]}
+    return None
+
+def set_temp_limit(user_id, limit):
+    until = (datetime.now() + timedelta(hours=24)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('UPDATE user_stats SET temp_limit = ?, temp_limit_until = ? WHERE user_id = ?', (limit, until, user_id))
+    conn.commit()
+    conn.close()
+
+def reset_daily_posts(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('UPDATE user_stats SET daily_posts = 0 WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
 
 def get_user_posts(user_id, limit=10):
     conn = sqlite3.connect(DB_PATH)
@@ -110,6 +171,17 @@ def get_post_author(post_id):
     post = conn.execute('SELECT user_id FROM user_posts WHERE post_id = ?', (post_id,)).fetchone()
     conn.close()
     return post[0] if post else None
+
+def can_user_post(user_id):
+    stats = get_user_stats(user_id)
+    limit = stats.get('temp_limit', 0)
+    if limit > 0:
+        current_limit = limit
+    else:
+        current_limit = DAILY_POST_LIMIT
+    
+    daily = stats.get('daily_posts', 0)
+    return daily < current_limit, current_limit - daily
 
 # ========== КЛАВИАТУРЫ ==========
 def get_main_keyboard():
@@ -149,27 +221,28 @@ def get_cancel_keyboard():
     return keyboard
 
 # ========== ФУНКЦИИ ==========
-def load_published():
+def load_json_file(filepath, default=None):
     try:
-        with open(PUBLISHED_FILE, "r") as f:
+        with open(filepath, "r") as f:
             return json.load(f)
     except:
-        return {"published": []}
+        return default if default is not None else {}
 
-def save_published(data):
-    with open(PUBLISHED_FILE, "w") as f:
+def save_json_file(filepath, data):
+    with open(filepath, "w") as f:
         json.dump(data, f)
 
+def load_published():
+    return load_json_file(PUBLISHED_FILE, {"published": []})
+
+def save_published(data):
+    save_json_file(PUBLISHED_FILE, data)
+
 def load_bans():
-    try:
-        with open(BAN_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
+    return load_json_file(BAN_FILE, {})
 
 def save_bans(bans):
-    with open(BAN_FILE, "w") as f:
-        json.dump(bans, f)
+    save_json_file(BAN_FILE, bans)
 
 def get_ban_info(user_id):
     bans = load_bans()
@@ -194,15 +267,20 @@ def ban_user(user_id, reason):
     bans[str(user_id)] = {"until": ban_until.isoformat(), "reason": reason}
     save_bans(bans)
 
+def unban_user(user_id):
+    bans = load_bans()
+    if str(user_id) in bans:
+        del bans[str(user_id)]
+        save_bans(bans)
+        return True
+    return False
+
 def is_spam(text):
     if not text:
         return False
     text_lower = text.lower()
     for word in FORBIDDEN_WORDS:
         if word in text_lower:
-            return True
-    for link in FORBIDDEN_LINKS:
-        if link in text_lower:
             return True
     return False
 
@@ -253,18 +331,50 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def send_to_admin(vk, user_id, message_text):
+def get_attachment_link(vk, attachment):
+    """Получает ссылку на вложение"""
+    try:
+        if attachment.get('type') == 'photo':
+            photo = attachment['photo']
+            return f"https://vk.com/photo{photo['owner_id']}_{photo['id']}"
+        elif attachment.get('type') == 'video':
+            video = attachment['video']
+            return f"https://vk.com/video{video['owner_id']}_{video['id']}"
+        elif attachment.get('type') == 'doc':
+            doc = attachment['doc']
+            return doc.get('url', f"https://vk.com/doc{doc['owner_id']}_{doc['id']}")
+        elif attachment.get('type') == 'sticker':
+            sticker = attachment['sticker']
+            return f"Стикер ID: {sticker.get('sticker_id')}"
+        elif attachment.get('type') == 'wall':
+            wall = attachment['wall']
+            return f"https://vk.com/wall{wall['from_id']}_{wall['id']}"
+        else:
+            return f"Вложение типа: {attachment.get('type')}"
+    except:
+        return "Не удалось получить ссылку на вложение"
+
+def send_to_admin(vk, user_id, message_text, attachments=None):
     if ADMIN_ID:
         try:
             user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")
             user_name = f"{user_info[0]['first_name']} {user_info[0]['last_name']}"
             user_link = make_profile_link(user_id, user_info[0]['first_name'], user_info[0]['last_name'])
             
-            admin_msg = f"📨 <b>Новое сообщение в поддержку</b>\n\n"
+            admin_msg = f"📨 Новое сообщение в поддержку\n\n"
             admin_msg += f"👤 От: {user_link}\n"
             admin_msg += f"🆔 ID: {user_id}\n"
-            admin_msg += f"💬 Сообщение:\n{message_text}\n\n"
-            admin_msg += f"✏️ Чтобы ответить, отправьте сообщение этому пользователю от имени группы"
+            
+            if message_text:
+                admin_msg += f"💬 Текст:\n{message_text}\n"
+            
+            if attachments:
+                admin_msg += f"\n📎 Вложения:\n"
+                for att in attachments:
+                    link = get_attachment_link(vk, att)
+                    admin_msg += f"   • {link}\n"
+            
+            admin_msg += f"\n✏️ Чтобы ответить, отправьте сообщение этому пользователю от имени группы"
             
             vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
         except Exception as e:
@@ -289,15 +399,34 @@ def run_publisher():
                 uid = post.get("from_id")
                 text = post.get("text", "")
                 
+                # Проверка на бан
                 if is_user_banned(uid):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
+                    send_message(vk, uid, f"🚫 Ваш пост отклонён. Вы в бане до {get_ban_info(uid)['hours']}ч.")
                     continue
                 
+                # Проверка на лимит постов в сутки
+                can_post, remaining = can_user_post(uid)
+                if not can_post:
+                    vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
+                    send_message(vk, uid, f"⚠️ Превышен лимит постов ({DAILY_POST_LIMIT} в сутки).\nДоступно сегодня: 0 из {remaining}")
+                    continue
+                
+                # Проверка на спам-слова
                 if is_spam(text):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
-                    ban_user(uid, "спам")
+                    ban_user(uid, "спам слова")
+                    send_message(vk, uid, f"🚫 Ваш пост отклонён (спам). Вы получили бан 24 часа.")
                     continue
                 
+                # Проверка на ссылки
+                if contains_any_link(text):
+                    vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
+                    ban_user(uid, "ссылки запрещены")
+                    send_message(vk, uid, f"🚫 Ваш пост отклонён (ссылки запрещены).\nВы получили бан 24 часа.\nПо вопросам разблокировки обратитесь в поддержку.")
+                    continue
+                
+                # Анонимность
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
                 
@@ -328,11 +457,9 @@ waiting_support = set()
 selected_post_for_delete = {}
 
 def run_messenger():
-    # Сессия для сообщений (токен сообщества)
     vk_session = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131')
     vk = vk_session.get_api()
     
-    # Сессия для удаления (токен пользователя/админа)
     vk_user_session = vk_api.VkApi(token=USER_TOKEN, api_version='5.131')
     vk_user = vk_user_session.get_api()
     
@@ -343,7 +470,52 @@ def run_messenger():
     for event in longpoll.listen():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
-            text = event.text.lower().strip()
+            text = event.text.lower().strip() if event.text else ""
+            
+            # Админ-команды
+            if user_id == ADMIN_ID and text.startswith("/"):
+                if text.startswith("/unban "):
+                    target_id = int(text.split()[1])
+                    if unban_user(target_id):
+                        send_message(vk, user_id, f"✅ Пользователь {target_id} разбанен")
+                    else:
+                        send_message(vk, user_id, f"❌ Пользователь {target_id} не в бане")
+                    continue
+                
+                elif text.startswith("/setlimit "):
+                    parts = text.split()
+                    if len(parts) == 3:
+                        target_id = int(parts[1])
+                        limit = int(parts[2])
+                        set_temp_limit(target_id, limit)
+                        send_message(vk, user_id, f"✅ Пользователю {target_id} установлен лимит {limit} постов на 24 часа")
+                    else:
+                        send_message(vk, user_id, f"❌ Формат: /setlimit ID ЛИМИТ")
+                    continue
+                
+                elif text.startswith("/stats "):
+                    target_id = int(text.split()[1])
+                    stats = get_user_stats(target_id)
+                    ban_info = get_ban_info(target_id)
+                    msg = f"📊 Статистика пользователя {target_id}\n\n"
+                    msg += f"📝 Всего постов: {stats['posts_count']}\n"
+                    msg += f"📅 Сегодня: {stats.get('daily_posts', 0)} из {stats.get('temp_limit', DAILY_POST_LIMIT)}\n"
+                    if ban_info:
+                        msg += f"🚫 Бан: {ban_info['hours']}ч {ban_info['minutes']}м\nПричина: {ban_info['reason']}"
+                    else:
+                        msg += f"✅ Бан: нет"
+                    send_message(vk, user_id, msg)
+                    continue
+                
+                elif text.startswith("/reset "):
+                    target_id = int(text.split()[1])
+                    reset_daily_posts(target_id)
+                    send_message(vk, user_id, f"✅ Счётчик постов для {target_id} сброшен")
+                    continue
+                
+                else:
+                    send_message(vk, user_id, "Доступные команды:\n/unban ID\n/setlimit ID ЛИМИТ\n/stats ID\n/reset ID")
+                    continue
             
             # Проверка бана
             ban_info = get_ban_info(user_id)
@@ -358,12 +530,13 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    send_to_admin(vk, user_id, event.text)
+                    attachments = event.attachments if hasattr(event, 'attachments') else []
+                    send_to_admin(vk, user_id, event.text, attachments)
                     send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
             
             # Команды
-            if text in ["начать", "меню", "start"]:
+            if text in ["начать", "меню", "start"] or not text:
                 stats = get_user_stats(user_id)
                 send_message(vk, user_id,
                     f"👋 Добро пожаловать!\n📊 Постов: {stats['posts_count']}",
@@ -372,16 +545,29 @@ def run_messenger():
             elif text == "📊 моя статистика":
                 stats = get_user_stats(user_id)
                 ban_info = get_ban_info(user_id)
+                current_limit = stats.get('temp_limit', 0)
+                if current_limit > 0:
+                    limit = current_limit
+                    limit_text = f"временно увеличено до {limit}"
+                else:
+                    limit = DAILY_POST_LIMIT
+                    limit_text = f"{limit}"
                 
-                msg = f"📊 <b>Ваша статистика</b>\n\n"
-                msg += f"📝 Опубликовано постов: {stats['posts_count']}\n"
+                remaining = limit - stats.get('daily_posts', 0)
+                
+                msg = f"📊 Ваша статистика\n\n"
+                msg += f"📝 Опубликовано всего: {stats['posts_count']}\n"
+                msg += f"📅 Доступно сегодня: {remaining} из {limit_text} постов\n"
+                
+                if current_limit > 0:
+                    until = datetime.fromisoformat(stats['temp_limit_until'])
+                    hours_left = int((until - datetime.now()).total_seconds() // 3600)
+                    msg += f"⏰ Временное увеличение действует ещё {hours_left}ч\n"
                 
                 if ban_info:
-                    msg += f"🚫 <b>Блокировка активна!</b>\n"
-                    msg += f"   Осталось: {ban_info['hours']}ч {ban_info['minutes']}м\n"
-                    msg += f"   Причина: {ban_info['reason']}"
+                    msg += f"\n🚫 Блокировка активна!\n   Осталось: {ban_info['hours']}ч {ban_info['minutes']}м\n   Причина: {ban_info['reason']}"
                 else:
-                    msg += f"✅ <b>Блокировки отсутствуют</b>"
+                    msg += f"\n✅ Блокировки отсутствуют"
                 
                 send_message(vk, user_id, msg, get_main_keyboard())
             
@@ -440,12 +626,16 @@ def run_messenger():
                     send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
             
             else:
-                send_message(vk, user_id, "Напишите 'Меню' для кнопок", get_main_keyboard())
+                # Неизвестная команда — показываем клавиатуру
+                send_message(vk, user_id, "Нажмите на кнопку в меню", get_main_keyboard())
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     init_db()
     print("✅ База данных готова")
+    
+    # Сброс daily_posts для всех (если новый день)
+    today = datetime.now().date().isoformat()
     
     # Запускаем публикатор в фоне
     t = threading.Thread(target=run_publisher, daemon=True)

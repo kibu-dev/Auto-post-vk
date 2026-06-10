@@ -247,7 +247,7 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def send_to_admin(vk, user_id, message_text):
+def send_to_admin(vk, user_id, message_text, attachments=None):
     if ADMIN_ID:
         try:
             user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")
@@ -257,8 +257,28 @@ def send_to_admin(vk, user_id, message_text):
             admin_msg = f"📨 Новое сообщение в поддержку\n\n"
             admin_msg += f"👤 От: {user_link}\n"
             admin_msg += f"🆔 ID: {user_id}\n"
-            admin_msg += f"💬 Сообщение:\n{message_text}\n\n"
-            admin_msg += f"✏️ Чтобы ответить, отправьте сообщение этому пользователю от имени группы"
+            if message_text:
+                admin_msg += f"💬 Текст:\n{message_text}\n"
+            
+            if attachments:
+                admin_msg += f"\n📎 Вложения:\n"
+                for att in attachments:
+                    if att.get('type') == 'photo':
+                        photo = att['photo']
+                        admin_msg += f"   • Фото: https://vk.com/photo{photo['owner_id']}_{photo['id']}\n"
+                    elif att.get('type') == 'video':
+                        video = att['video']
+                        admin_msg += f"   • Видео: https://vk.com/video{video['owner_id']}_{video['id']}\n"
+                    elif att.get('type') == 'doc':
+                        doc = att['doc']
+                        admin_msg += f"   • Документ: {doc.get('title', 'файл')}\n"
+                    elif att.get('type') == 'sticker':
+                        sticker = att['sticker']
+                        admin_msg += f"   • Стикер ID: {sticker.get('sticker_id')}\n"
+                    else:
+                        admin_msg += f"   • Вложение: {att.get('type')}\n"
+            
+            admin_msg += f"\n✏️ Чтобы ответить, отправьте сообщение этому пользователю"
             
             vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
         except Exception as e:
@@ -348,7 +368,11 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    send_to_admin(vk, user_id, event.text)
+                    # Получаем вложения из event
+                    attachments = []
+                    if hasattr(event, 'attachments') and event.attachments:
+                        attachments = event.attachments
+                    send_to_admin(vk, user_id, event.text, attachments)
                     send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
             
@@ -414,8 +438,11 @@ def run_messenger():
                     if match:
                         post_id = int(match.group(1))
                         if get_post_author(post_id) == user_id:
+                            # Отправляем ссылку на пост
+                            post_link = f"https://vk.com/wall-{GROUP_ID}_{post_id}"
+                            send_message(vk, user_id, f"🔗 Ссылка на пост: {post_link}")
                             selected_post_for_delete[user_id] = post_id
-                            send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard())
+                            send_message(vk, user_id, f"⚠️ Удалить этот пост?", get_confirm_keyboard())
                         else:
                             send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                     else:

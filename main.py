@@ -314,12 +314,25 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def send_to_admin(vk, user_id, message_text, attachments=None):
+def get_message_attachments(vk, peer_id, message_id):
+    """Получает вложения сообщения через API."""
+    try:
+        response = vk.messages.getById(message_ids=message_id, peer_id=peer_id)
+        messages = response.get('items', [])
+        if messages:
+            return messages[0].get('attachments', [])
+    except Exception as e:
+        print(f"Ошибка получения вложений: {e}")
+    return []
+
+def send_to_admin(vk, vk_user, user_id, message_text, peer_id, message_id):
     """Отправка сообщения администратору."""
     if ADMIN_ID:
         try:
             user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
             user_link = make_profile_link(user_id, user_info["first_name"], user_info["last_name"])
+
+            attachments = get_message_attachments(vk, peer_id, message_id)
 
             admin_msg = f"📨 Новое сообщение в поддержку\n\n"
             admin_msg += f"👤 От: {user_link}\n"
@@ -329,20 +342,21 @@ def send_to_admin(vk, user_id, message_text, attachments=None):
             if attachments:
                 admin_msg += "\n📎 Вложения:\n"
                 for att in attachments:
-                    if att.get("type") == "photo":
-                        photo = att["photo"]
+                    att_type = att.get('type')
+                    if att_type == 'photo':
+                        photo = att['photo']
                         admin_msg += f"   • Фото: https://vk.com/photo{photo['owner_id']}_{photo['id']}\n"
-                    elif att.get("type") == "video":
-                        video = att["video"]
+                    elif att_type == 'video':
+                        video = att['video']
                         admin_msg += f"   • Видео: https://vk.com/video{video['owner_id']}_{video['id']}\n"
-                    elif att.get("type") == "doc":
-                        doc = att["doc"]
+                    elif att_type == 'doc':
+                        doc = att['doc']
                         admin_msg += f"   • Документ: {doc.get('title', 'файл')}\n"
-                    elif att.get("type") == "sticker":
-                        sticker = att["sticker"]
+                    elif att_type == 'sticker':
+                        sticker = att['sticker']
                         admin_msg += f"   • Стикер ID: {sticker.get('sticker_id')}\n"
                     else:
-                        admin_msg += f"   • Вложение: {att.get('type')}\n"
+                        admin_msg += f"   • Вложение: {att_type}\n"
 
             admin_msg += "\n✏️ Чтобы ответить, отправьте сообщение этому пользователю."
 
@@ -446,24 +460,9 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    
-                    # Получаем вложения разными способами
-                    attachments = []
-                    try:
-                        # Способ 1: event.attachments
-                        if hasattr(event, 'attachments') and event.attachments:
-                            attachments = event.attachments
-                        # Способ 2: из event.message
-                        elif hasattr(event, 'message') and hasattr(event.message, 'attachments'):
-                            attachments = event.message.attachments
-                        # Способ 3: из event.obj
-                        elif hasattr(event, 'obj') and hasattr(event.obj, 'attachments'):
-                            attachments = event.obj.attachments
-                    except Exception as e:
-                        print(f"Ошибка получения вложений: {e}")
-                    
-                    # Отправляем админу (даже если вложений нет, отправится текст)
-                    send_to_admin(vk, user_id, event.text, attachments)
+                    peer_id = event.peer_id if hasattr(event, 'peer_id') else user_id
+                    message_id = event.id if hasattr(event, 'id') else None
+                    send_to_admin(vk, vk_user, user_id, event.text, peer_id, message_id)
                     send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
 

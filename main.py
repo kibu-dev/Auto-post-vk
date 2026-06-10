@@ -314,25 +314,12 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def get_message_attachments(vk, peer_id, message_id):
-    """Получает вложения сообщения через API."""
-    try:
-        response = vk.messages.getById(message_ids=message_id, peer_id=peer_id)
-        messages = response.get('items', [])
-        if messages:
-            return messages[0].get('attachments', [])
-    except Exception as e:
-        print(f"Ошибка получения вложений: {e}")
-    return []
-
-def send_to_admin(vk, vk_user, user_id, message_text, peer_id, message_id):
+def send_to_admin(vk, user_id, message_text, attachments=None):
     """Отправка сообщения администратору."""
     if ADMIN_ID:
         try:
             user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
             user_link = make_profile_link(user_id, user_info["first_name"], user_info["last_name"])
-
-            attachments = get_message_attachments(vk, peer_id, message_id)
 
             admin_msg = f"📨 Новое сообщение в поддержку\n\n"
             admin_msg += f"👤 От: {user_link}\n"
@@ -436,7 +423,8 @@ def run_messenger():
     vk_user_session = vk_api.VkApi(token=USER_TOKEN, api_version="5.131")
     vk_user = vk_user_session.get_api()
 
-    longpoll = VkLongPoll(vk_session, group_id=GROUP_ID)
+    # ВАЖНО: mode=2 для получения вложений, preload_messages=True для полных данных
+    longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, mode=2, preload_messages=True)
 
     print("🤖 ЛС бот запущен")
 
@@ -460,9 +448,8 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    peer_id = event.peer_id if hasattr(event, 'peer_id') else user_id
-                    message_id = event.id if hasattr(event, 'id') else None
-                    send_to_admin(vk, vk_user, user_id, event.text, peer_id, message_id)
+                    attachments = event.attachments if hasattr(event, 'attachments') else []
+                    send_to_admin(vk, vk_user, user_id, event.text, attachments)
                     send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
 

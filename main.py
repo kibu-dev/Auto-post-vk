@@ -43,9 +43,9 @@ def contains_any_link(text):
     if not text:
         return False
     patterns = [
-        r'https?://[^\s]+',  # http:// или https://
-        r'www\.[^\s]+',      # www.
-        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'  # домен типа example.com
+        r'https?://[^\s]+',
+        r'www\.[^\s]+',
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'
     ]
     for pattern in patterns:
         if re.search(pattern, text, re.IGNORECASE):
@@ -346,12 +346,15 @@ def run_publisher():
 
                 # Проверка на ссылки (НЕ УДАЛЯЕМ, только уведомляем админа)
                 if contains_any_link(text):
-                    # Отправляем уведомление админу
+                    # Отправляем уведомление админу (через USER_TOKEN)
                     if ADMIN_ID:
                         try:
+                            # Создаём отдельную сессию для отправки (от пользователя)
+                            vk_user_for_notify = vk_api.VkApi(token=USER_TOKEN, api_version='5.131').get_api()
+                            
                             # Получаем имя пользователя
                             try:
-                                user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
+                                user_info = vk_user_for_notify.users.get(user_ids=uid, fields="first_name,last_name")[0]
                                 user_name = f"{user_info['first_name']} {user_info['last_name']}"
                             except:
                                 user_name = "Неизвестный"
@@ -366,15 +369,13 @@ def run_publisher():
                             # Ссылка на пост в предложках
                             post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
                             
-                            admin_msg = f"🚨 Подозрительный пост\n\n{author_text}\n\nТекст:\n{text}\n\nДля публикации: {post_link}"
-                            vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
+                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nСсылка: {post_link}"
+                            vk_user_for_notify.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
                             print(f"✅ Уведомление админу отправлено (пост {pid})")
                         except Exception as e:
                             print(f"❌ Ошибка отправки админу: {e}")
                     
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
-                    # НЕ УДАЛЯЕМ пост, просто пропускаем его в этом цикле
-                    # Пост остаётся в pending и будет снова проверен позже
                     continue
 
                 # Анонимность

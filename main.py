@@ -449,7 +449,7 @@ def run_messenger():
                 else:
                     waiting_support.discard(user_id)
                     attachments = event.attachments if hasattr(event, 'attachments') else []
-                    send_to_admin(vk, vk_user, user_id, event.text, attachments)
+                    send_to_admin(vk, user_id, event.text, attachments)
                     send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
 

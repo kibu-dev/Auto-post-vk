@@ -160,7 +160,7 @@ def get_posts_keyboard(posts):
     """Клавиатура выбора поста для удаления."""
     keyboard = VkKeyboard(one_time=True)
     for i, post in enumerate(posts[:10], 1):
-        preview = post["text"][:25] + "..." if len(post["text"]) > 25 else post["text"]
+        preview = post["text"][:35] + "..." if len(post["text"]) > 35 else post["text"]
         keyboard.add_button(f"🗑 Пост #{post['post_id']}: {preview}", color=VkKeyboardColor.SECONDARY)
         if i % 2 == 0 and i != len(posts[:10]):
             keyboard.add_line()
@@ -324,9 +324,8 @@ def send_to_admin(vk, user_id, message_text, attachments=None):
 
             admin_msg = f"📨 Новое сообщение в поддержку\n\n"
             admin_msg += f"👤 От: {user_link}\n"
-            admin_msg += f"🆔 ID: {user_id}\n"
             if message_text:
-                admin_msg += f"💬 Текст:\n{message_text}\n"
+                admin_msg += f"\n💬 Сообщение:\n{message_text}\n"
 
             if attachments:
                 admin_msg += "\n📎 Вложения:\n"
@@ -349,6 +348,7 @@ def send_to_admin(vk, user_id, message_text, attachments=None):
             admin_msg += "\n✏️ Чтобы ответить, отправьте сообщение этому пользователю."
 
             vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
+            print(f"✅ Сообщение админу отправлено")
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 

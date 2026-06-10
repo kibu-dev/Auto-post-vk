@@ -24,6 +24,7 @@ BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 
 PUBLISHED_FILE = "published.json"
 BAN_FILE = "bans.json"
+MODERATION_FILE = "moderation.json"
 
 # Спам-фильтры (только для слов)
 FORBIDDEN_WORDS = [
@@ -38,8 +39,8 @@ FORBIDDEN_WORDS = [
     "услуги",
 ]
 
-# Функция проверки наличия любых ссылок
 def contains_any_link(text):
+    """Проверка наличия любых ссылок."""
     if not text:
         return False
     patterns = [
@@ -57,7 +58,6 @@ import sqlite3
 DB_PATH = "posts.db"
 
 def init_db():
-    """Инициализация базы данных."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """
@@ -84,7 +84,6 @@ def init_db():
     conn.close()
 
 def add_post(user_id, post_id, text):
-    """Добавление поста в базу данных."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT OR REPLACE INTO user_posts (post_id, user_id, published_date, text) "
@@ -106,7 +105,6 @@ def add_post(user_id, post_id, text):
     conn.close()
 
 def get_user_stats(user_id):
-    """Получение статистики пользователя."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     stats = conn.execute("SELECT * FROM user_stats WHERE user_id = ?", (user_id,)).fetchone()
@@ -118,7 +116,6 @@ def get_user_stats(user_id):
     }
 
 def get_user_posts(user_id):
-    """Получение постов пользователя."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     posts = conn.execute(
@@ -130,7 +127,6 @@ def get_user_posts(user_id):
     return [dict(p) for p in posts]
 
 def delete_user_post(user_id, post_id):
-    """Удаление поста пользователя."""
     conn = sqlite3.connect(DB_PATH)
     post = conn.execute(
         "SELECT * FROM user_posts WHERE post_id = ? AND user_id = ?", (post_id, user_id)
@@ -145,7 +141,6 @@ def delete_user_post(user_id, post_id):
     return False
 
 def get_post_author(post_id):
-    """Получение автора поста."""
     conn = sqlite3.connect(DB_PATH)
     post = conn.execute("SELECT user_id FROM user_posts WHERE post_id = ?", (post_id,)).fetchone()
     conn.close()
@@ -153,7 +148,6 @@ def get_post_author(post_id):
 
 # Клавиатуры
 def get_main_keyboard():
-    """Главная клавиатура."""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("📊 Моя статистика", color=VkKeyboardColor.PRIMARY)
     keyboard.add_line()
@@ -163,7 +157,6 @@ def get_main_keyboard():
     return keyboard
 
 def get_posts_keyboard(posts):
-    """Клавиатура выбора поста для удаления."""
     keyboard = VkKeyboard(one_time=True)
     for i, post in enumerate(posts[:10], 1):
         preview = post["text"][:35] + "..." if len(post["text"]) > 35 else post["text"]
@@ -175,27 +168,23 @@ def get_posts_keyboard(posts):
     return keyboard
 
 def get_confirm_keyboard():
-    """Подтверждение удаления поста."""
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("✅ Да, удалить", color=VkKeyboardColor.NEGATIVE)
     keyboard.add_button("❌ Нет", color=VkKeyboardColor.SECONDARY)
     return keyboard
 
 def get_back_keyboard():
-    """Кнопка возврата в главное меню."""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("🔙 Назад в меню", color=VkKeyboardColor.PRIMARY)
     return keyboard
 
 def get_cancel_keyboard():
-    """Кнопка отмены действия."""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("🔙 Отмена", color=VkKeyboardColor.SECONDARY)
     return keyboard
 
-# Функции
+# Функции работы с JSON
 def load_published():
-    """Загрузка списка опубликованных постов."""
     try:
         with open(PUBLISHED_FILE, "r") as f:
             return json.load(f)
@@ -203,12 +192,10 @@ def load_published():
         return {"published": []}
 
 def save_published(data):
-    """Сохранение списка опубликованных постов."""
     with open(PUBLISHED_FILE, "w") as f:
         json.dump(data, f)
 
 def load_bans():
-    """Загрузка списка банов пользователей."""
     try:
         with open(BAN_FILE, "r") as f:
             return json.load(f)
@@ -216,12 +203,21 @@ def load_bans():
         return {}
 
 def save_bans(bans):
-    """Сохранение списка банов пользователей."""
     with open(BAN_FILE, "w") as f:
         json.dump(bans, f)
 
+def load_moderation():
+    try:
+        with open(MODERATION_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"sent": []}
+
+def save_moderation(data):
+    with open(MODERATION_FILE, "w") as f:
+        json.dump(data, f)
+
 def get_ban_info(user_id):
-    """Проверка статуса блокировки пользователя."""
     bans = load_bans()
     if str(user_id) not in bans:
         return None
@@ -240,18 +236,15 @@ def get_ban_info(user_id):
     }
 
 def is_user_banned(user_id):
-    """Проверка, заблокирован ли пользователь."""
     return get_ban_info(user_id) is not None
 
 def ban_user(user_id, reason):
-    """Блокировка пользователя."""
     bans = load_bans()
     ban_until = datetime.now() + timedelta(hours=BAN_HOURS)
     bans[str(user_id)] = {"until": ban_until.isoformat(), "reason": reason}
     save_bans(bans)
 
 def is_spam(text):
-    """Проверка текста на спам-слова."""
     if not text:
         return False
     text_lower = text.lower()
@@ -261,7 +254,6 @@ def is_spam(text):
     return False
 
 def contains_anonymous(text):
-    """Проверка текста на анонимность."""
     keywords = ["анон", "анонимно", "аноним", "#анон", "#анонимно", "#аноним"]
     for kw in keywords:
         if kw in text.lower():
@@ -269,7 +261,6 @@ def contains_anonymous(text):
     return False
 
 def remove_keywords(text):
-    """Удаление ключевых слов из текста."""
     keywords = ["анон", "анонимно", "аноним", "#анон", "#анонимно", "#аноним"]
     cleaned = text
     for kw in keywords:
@@ -278,7 +269,6 @@ def remove_keywords(text):
     return cleaned
 
 def build_attachments(post):
-    """Создание списка вложений для публикации."""
     attachments = []
     for a in post.get("attachments", []):
         t = a["type"]
@@ -294,7 +284,6 @@ def build_attachments(post):
     return ",".join(attachments) if attachments else None
 
 def get_user_name(vk, user_id):
-    """Получение имени пользователя."""
     try:
         user = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
         return user["first_name"], user["last_name"]
@@ -302,7 +291,6 @@ def get_user_name(vk, user_id):
         return "Пользователь", ""
 
 def send_message(vk, user_id, text, keyboard=None):
-    """Отправка сообщения пользователю."""
     try:
         vk.messages.send(
             user_id=user_id,
@@ -315,7 +303,6 @@ def send_message(vk, user_id, text, keyboard=None):
 
 # Публикатор
 def run_publisher():
-    """Основной цикл публикатора."""
     vk = vk_api.VkApi(token=USER_TOKEN).get_api()
     published = load_published()
     last_time = None
@@ -333,54 +320,55 @@ def run_publisher():
                 uid = post.get("from_id")
                 text = post.get("text", "")
 
-                # Проверка на бан
                 if is_user_banned(uid):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     continue
 
-                # Проверка на спам-слова (баним)
                 if is_spam(text):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     ban_user(uid, "Спам/Реклама")
                     continue
 
-                # Проверка на ссылки (НЕ УДАЛЯЕМ, уведомляем админа)
                 if contains_any_link(text):
-                    if ADMIN_ID:
-                        try:
-                            # Получаем имя пользователя
+                    moderation = load_moderation()
+                    
+                    if pid not in moderation["sent"]:
+                        if ADMIN_ID:
                             try:
-                                user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
-                                user_name = f"{user_info['first_name']} {user_info['last_name']}"
-                            except:
-                                user_name = "Неизвестный"
-                            
-                            # Определяем анонимность
-                            is_anon = contains_anonymous(text)
-                            if is_anon:
-                                author_text = "Автор: Аноним"
-                            else:
-                                author_text = f"Автор: {user_name}"
-                            
-                            post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
-                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\n{post_link}"
-                            
-                            # Отправляем от имени сообщества
-                            vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
-                            vk_group.messages.send(
-                                user_id=ADMIN_ID,
-                                message=admin_msg,
-                                random_id=0,
-                                group_id=GROUP_ID
-                            )
-                            print(f"✅ Уведомление админу отправлено (пост {pid})")
-                        except Exception as e:
-                            print(f"❌ Ошибка отправки админу: {e}")
+                                try:
+                                    user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
+                                    user_name = f"{user_info['first_name']} {user_info['last_name']}"
+                                except:
+                                    user_name = "Неизвестный"
+                                
+                                is_anon = contains_anonymous(text)
+                                if is_anon:
+                                    author_text = "Автор: Аноним"
+                                else:
+                                    author_text = f"Автор: {user_name}"
+                                
+                                post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
+                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\n{post_link}"
+                                
+                                vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
+                                vk_group.messages.send(
+                                    user_id=ADMIN_ID,
+                                    message=admin_msg,
+                                    random_id=0,
+                                    group_id=GROUP_ID
+                                )
+                                print(f"✅ Уведомление админу отправлено (пост {pid})")
+                                
+                                moderation["sent"].append(pid)
+                                save_moderation(moderation)
+                            except Exception as e:
+                                print(f"❌ Ошибка отправки админу: {e}")
+                    else:
+                        print(f"⚠️ Пост {pid} уже отправлен на модерацию")
                     
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
                     continue
 
-                # Анонимность
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
 
@@ -388,7 +376,8 @@ def run_publisher():
                     final = f"{clean_text}\n\nАвтор: Аноним"
                 else:
                     first, last = get_user_name(vk, uid)
-                    final = f"{clean_text}\n\nАвтор: {first} {last}"
+                    author_link = f"[id{uid}|{first} {last}]"
+                    final = f"{clean_text}\n\nАвтор: {author_link}"
 
                 attachments = build_attachments(post)
                 result = vk.wall.post(
@@ -415,7 +404,6 @@ waiting_support = set()
 selected_post_for_delete = {}
 
 def run_messenger():
-    """Основной цикл мессенджера."""
     vk_session = vk_api.VkApi(token=GROUP_TOKEN, api_version="5.131")
     vk = vk_session.get_api()
 
@@ -446,11 +434,8 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    
-                    # Получаем ID сообщения для пересылки
                     msg_id = event.message_id if hasattr(event, 'message_id') else event.id
                     
-                    # Отправляем админу (поддержка)
                     if ADMIN_ID:
                         try:
                             vk.messages.send(
@@ -463,23 +448,17 @@ def run_messenger():
                             send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                         except Exception as e:
                             print(f"Ошибка пересылки: {e}")
-                            send_message(vk, user_id, "❌ Ошибка при отправке. Попробуйте позже.", get_main_keyboard())
+                            send_message(vk, user_id, "❌ Ошибка при отправке.", get_main_keyboard())
                 continue
 
             if text in ["начать", "меню", "start"]:
                 stats = get_user_stats(user_id)
-                send_message(
-                    vk,
-                    user_id,
-                    f"👋 Добро пожаловать!\n📊 Постов: {stats['posts_count']}",
-                    get_main_keyboard(),
-                )
+                send_message(vk, user_id, f"👋 Добро пожаловать!\n📊 Постов: {stats['posts_count']}", get_main_keyboard())
 
             elif text == "📊 моя статистика":
                 stats = get_user_stats(user_id)
                 ban_info = get_ban_info(user_id)
-                msg = "📊 Ваша статистика\n\n"
-                msg += f"📝 Опубликовано постов: {stats['posts_count']}\n"
+                msg = f"📊 Ваша статистика\n\n📝 Постов: {stats['posts_count']}\n"
                 if ban_info:
                     msg += f"\n🚫 Блокировка активна!\nОсталось: {ban_info['hours']}ч {ban_info['minutes']}м\nПричина: {ban_info['reason']}"
                 else:
@@ -491,22 +470,11 @@ def run_messenger():
                 if not posts:
                     send_message(vk, user_id, "📭 У вас нет опубликованных постов.", get_main_keyboard())
                 else:
-                    keyboard = get_posts_keyboard(posts)
-                    send_message(
-                        vk,
-                        user_id,
-                        f"📋 У вас {len(posts)} пост(ов).\nВыберите, какой удалить:",
-                        keyboard,
-                    )
+                    send_message(vk, user_id, f"📋 У вас {len(posts)} пост(ов).\nВыберите какой удалить:", get_posts_keyboard(posts))
 
             elif text == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
-                send_message(
-                    vk,
-                    user_id,
-                    "📝 Напишите ваше сообщение администратору.\nНажмите «Отмена» чтобы вернуться в меню.",
-                    get_cancel_keyboard(),
-                )
+                send_message(vk, user_id, "📝 Напишите ваше сообщение администратору.\nНажмите «Отмена» чтобы вернуться в меню.", get_cancel_keyboard())
 
             elif text == "🔙 отмена":
                 send_message(vk, user_id, "Главное меню:", get_main_keyboard())
@@ -522,55 +490,29 @@ def run_messenger():
             elif text == "✅ да, удалить":
                 if user_id in selected_post_for_delete:
                     post_id = selected_post_for_delete[user_id]
-                    author = get_post_author(post_id)
-                    if author == user_id:
+                    if get_post_author(post_id) == user_id:
                         try:
                             vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
                             delete_user_post(user_id, post_id)
-                            send_message(
-                                vk,
-                                user_id,
-                                f"✅ Пост #{post_id} удален!",
-                                get_main_keyboard(),
-                            )
+                            send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
                             selected_post_for_delete.pop(user_id, None)
                         except Exception as e:
-                            send_message(
-                                vk,
-                                user_id,
-                                f"❌ Ошибка удаления: {e}",
-                                get_main_keyboard(),
-                            )
+                            send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
                     else:
                         send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                 else:
-                    send_message(
-                        vk,
-                        user_id,
-                        "Сначала выберите пост для удаления.",
-                        get_main_keyboard(),
-                    )
+                    send_message(vk, user_id, "Сначала выберите пост для удаления.", get_main_keyboard())
 
             elif text.startswith("🗑 пост #"):
                 try:
                     match = re.search(r"#(\d+)", text)
                     if match:
                         post_id = int(match.group(1))
-                        author = get_post_author(post_id)
-                        if author == user_id:
+                        if get_post_author(post_id) == user_id:
                             post_link = f"https://vk.com/wall-{GROUP_ID}_{post_id}"
-                            send_message(
-                                vk,
-                                user_id,
-                                f"🔗 Ссылка на пост: {post_link}",
-                            )
+                            send_message(vk, user_id, f"🔗 Ссылка на пост: {post_link}")
                             selected_post_for_delete[user_id] = post_id
-                            send_message(
-                                vk,
-                                user_id,
-                                f"⚠️ Удалить этот пост?",
-                                get_confirm_keyboard(),
-                            )
+                            send_message(vk, user_id, f"⚠️ Удалить этот пост?", get_confirm_keyboard())
                         else:
                             send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                     else:

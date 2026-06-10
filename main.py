@@ -344,17 +344,13 @@ def run_publisher():
                     ban_user(uid, "Спам/Реклама")
                     continue
 
-                # Проверка на ссылки (НЕ УДАЛЯЕМ, только уведомляем админа)
+                # Проверка на ссылки (НЕ УДАЛЯЕМ, уведомляем админа)
                 if contains_any_link(text):
-                    # Отправляем уведомление админу (через USER_TOKEN)
                     if ADMIN_ID:
                         try:
-                            # Создаём отдельную сессию для отправки (от пользователя)
-                            vk_user_for_notify = vk_api.VkApi(token=USER_TOKEN, api_version='5.131').get_api()
-                            
                             # Получаем имя пользователя
                             try:
-                                user_info = vk_user_for_notify.users.get(user_ids=uid, fields="first_name,last_name")[0]
+                                user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
                                 user_name = f"{user_info['first_name']} {user_info['last_name']}"
                             except:
                                 user_name = "Неизвестный"
@@ -366,10 +362,12 @@ def run_publisher():
                             else:
                                 author_text = f"Автор: {user_name}"
                             
-                            # Ссылка на пост в предложках
+                            # Ссылка на пост в предложках (прямая ссылка на модерацию)
                             post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
                             
-                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nСсылка: {post_link}"
+                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nСсылка для модерации:\n{post_link}"
+                            
+                            vk_user_for_notify = vk_api.VkApi(token=USER_TOKEN, api_version='5.131').get_api()
                             vk_user_for_notify.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
                             print(f"✅ Уведомление админу отправлено (пост {pid})")
                         except Exception as e:

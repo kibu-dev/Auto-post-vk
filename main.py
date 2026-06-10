@@ -319,7 +319,6 @@ def send_to_admin(vk, user_id, message_text, attachments=None):
     if ADMIN_ID:
         try:
             user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
-            user_name = f"{user_info['first_name']} {user_info['last_name']}"
             user_link = make_profile_link(user_id, user_info["first_name"], user_info["last_name"])
 
             admin_msg = f"📨 Новое сообщение в поддержку\n\n"
@@ -348,9 +347,9 @@ def send_to_admin(vk, user_id, message_text, attachments=None):
             admin_msg += "\n✏️ Чтобы ответить, отправьте сообщение этому пользователю."
 
             vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
-            print(f"✅ Сообщение админу отправлено")
+            print(f"✅ Сообщение админу отправлено (от {user_id})")
         except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
+            print(f"❌ Ошибка отправки админу: {e}")
 
 # Публикатор
 def run_publisher():
@@ -447,7 +446,23 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    attachments = event.attachments if hasattr(event, "attachments") and event.attachments else []
+                    
+                    # Получаем вложения разными способами
+                    attachments = []
+                    try:
+                        # Способ 1: event.attachments
+                        if hasattr(event, 'attachments') and event.attachments:
+                            attachments = event.attachments
+                        # Способ 2: из event.message
+                        elif hasattr(event, 'message') and hasattr(event.message, 'attachments'):
+                            attachments = event.message.attachments
+                        # Способ 3: из event.obj
+                        elif hasattr(event, 'obj') and hasattr(event.obj, 'attachments'):
+                            attachments = event.obj.attachments
+                    except Exception as e:
+                        print(f"Ошибка получения вложений: {e}")
+                    
+                    # Отправляем админу (даже если вложений нет, отправится текст)
                     send_to_admin(vk, user_id, event.text, attachments)
                     send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue

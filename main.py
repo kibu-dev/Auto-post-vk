@@ -18,8 +18,8 @@ GROUP_TOKEN = os.getenv("GROUP_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "1800"))
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "120"))
+PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "3600"))
 BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 
 PUBLISHED_FILE = "published.json"
@@ -362,13 +362,17 @@ def run_publisher():
                             else:
                                 author_text = f"Автор: {user_name}"
                             
-                            # Ссылка на пост в предложках (прямая ссылка на модерацию)
                             post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
+                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\n{post_link}"
                             
-                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nСсылка для модерации:\n{post_link}"
-                            
-                            vk_user_for_notify = vk_api.VkApi(token=USER_TOKEN, api_version='5.131').get_api()
-                            vk_user_for_notify.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
+                            # Отправляем от имени сообщества
+                            vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
+                            vk_group.messages.send(
+                                user_id=ADMIN_ID,
+                                message=admin_msg,
+                                random_id=0,
+                                group_id=GROUP_ID
+                            )
                             print(f"✅ Уведомление админу отправлено (пост {pid})")
                         except Exception as e:
                             print(f"❌ Ошибка отправки админу: {e}")

@@ -315,7 +315,7 @@ def send_message(vk, user_id, text, keyboard=None):
         print(f"Ошибка отправки: {e}")
 
 def send_to_admin(vk, user_id, message_text, attachments=None):
-    """Отправка сообщения администратору."""
+    """Отправка сообщения администратору (только текст, если пересылка не сработала)."""
     if ADMIN_ID:
         try:
             user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
@@ -327,23 +327,7 @@ def send_to_admin(vk, user_id, message_text, attachments=None):
                 admin_msg += f"\n💬 Сообщение:\n{message_text}\n"
 
             if attachments:
-                admin_msg += "\n📎 Вложения:\n"
-                for att in attachments:
-                    att_type = att.get('type')
-                    if att_type == 'photo':
-                        photo = att['photo']
-                        admin_msg += f"   • Фото: https://vk.com/photo{photo['owner_id']}_{photo['id']}\n"
-                    elif att_type == 'video':
-                        video = att['video']
-                        admin_msg += f"   • Видео: https://vk.com/video{video['owner_id']}_{video['id']}\n"
-                    elif att_type == 'doc':
-                        doc = att['doc']
-                        admin_msg += f"   • Документ: {doc.get('title', 'файл')}\n"
-                    elif att_type == 'sticker':
-                        sticker = att['sticker']
-                        admin_msg += f"   • Стикер ID: {sticker.get('sticker_id')}\n"
-                    else:
-                        admin_msg += f"   • Вложение: {att_type}\n"
+                admin_msg += f"\n📎 Количество вложений: {len(attachments)}\n"
 
             admin_msg += "\n✏️ Чтобы ответить, отправьте сообщение этому пользователю."
 
@@ -423,7 +407,6 @@ def run_messenger():
     vk_user_session = vk_api.VkApi(token=USER_TOKEN, api_version="5.131")
     vk_user = vk_user_session.get_api()
 
-    # ВАЖНО: mode=2 для получения вложений, preload_messages=True для полных данных
     longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, mode=2, preload_messages=True)
 
     print("🤖 ЛС бот запущен")
@@ -448,9 +431,32 @@ def run_messenger():
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
-                    attachments = event.attachments if hasattr(event, 'attachments') else []
-                    send_to_admin(vk, user_id, event.text, attachments)
-                    send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
+                    
+                    # Получаем ID сообщения для пересылки
+                    msg_id = event.message_id if hasattr(event, 'message_id') else event.id
+                    
+                    # Получаем имя пользователя для подписи
+                    try:
+                        user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
+                        user_name = f"{user_info['first_name']} {user_info['last_name']}"
+                    except:
+                        user_name = "пользователя"
+                    
+                    # Пересылаем сообщение админу
+                    try:
+                        vk.messages.send(
+                            user_id=ADMIN_ID,
+                            message=f"📨 Пересланное сообщение в поддержку\n\nОт: [id{user_id}|{user_name}]",
+                            random_id=0,
+                            forward_messages=msg_id,
+                            group_id=GROUP_ID
+                        )
+                        send_message(vk, user_id, "✅ Сообщение переслано администратору!", get_main_keyboard())
+                    except Exception as e:
+                        print(f"Ошибка пересылки: {e}")
+                        # Если пересылка не работает, отправляем хотя бы текст
+                        send_to_admin(vk, user_id, event.text, [])
+                        send_message(vk, user_id, "✅ Сообщение отправлено администратору (только текст)", get_main_keyboard())
                 continue
 
             if text in ["начать", "меню", "start"]:

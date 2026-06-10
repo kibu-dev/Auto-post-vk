@@ -25,7 +25,7 @@ BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 PUBLISHED_FILE = "published.json"
 BAN_FILE = "bans.json"
 
-# Спам-фильтры (только для слов, ссылки теперь не блокируем)
+# Спам-фильтры (только для слов)
 FORBIDDEN_WORDS = [
     "реклама",
     "раскрутка",
@@ -313,35 +313,6 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def send_to_admin(vk, user_id, message_text, is_support=False):
-    """Отправка уведомления администратору."""
-    if ADMIN_ID:
-        try:
-            # Получаем имя пользователя
-            try:
-                user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
-                user_name = f"{user_info['first_name']} {user_info['last_name']}"
-            except:
-                user_name = "Пользователь"
-            
-            if is_support:
-                # Это поддержка — пересылаем сообщение
-                msg_id = message_text  # в этом параметре приходит msg_id
-                vk.messages.send(
-                    user_id=ADMIN_ID,
-                    message=f"📨 Новое обращение в поддержку",
-                    random_id=0,
-                    forward_messages=msg_id,
-                    group_id=GROUP_ID
-                )
-            else:
-                # Это модерация — отправляем текст
-                admin_msg = f"🚨 Подозрительный пост\n\nАвтор: {user_name}\n\nТекст:\n{message_text}"
-                vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
-            print(f"✅ Уведомление админу отправлено (от {user_id})")
-        except Exception as e:
-            print(f"❌ Ошибка отправки админу: {e}")
-
 # Публикатор
 def run_publisher():
     """Основной цикл публикатора."""
@@ -373,12 +344,37 @@ def run_publisher():
                     ban_user(uid, "Спам/Реклама")
                     continue
 
-                # Проверка на ссылки (отправляем на модерацию, не баним)
+                # Проверка на ссылки (НЕ УДАЛЯЕМ, только уведомляем админа)
                 if contains_any_link(text):
-                    vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
-                    # Уведомляем админа
-                    send_to_admin(vk, uid, text, is_support=False)
-                    print(f"⚠️ Пост {pid} отправлен на модерацию (ссылки)")
+                    # Отправляем уведомление админу
+                    if ADMIN_ID:
+                        try:
+                            # Получаем имя пользователя
+                            try:
+                                user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
+                                user_name = f"{user_info['first_name']} {user_info['last_name']}"
+                            except:
+                                user_name = "Неизвестный"
+                            
+                            # Определяем анонимность
+                            is_anon = contains_anonymous(text)
+                            if is_anon:
+                                author_text = "Автор: Аноним"
+                            else:
+                                author_text = f"Автор: {user_name}"
+                            
+                            # Ссылка на пост в предложках
+                            post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
+                            
+                            admin_msg = f"🚨 Подозрительный пост\n\n{author_text}\n\nТекст:\n{text}\n\nДля публикации: {post_link}"
+                            vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
+                            print(f"✅ Уведомление админу отправлено (пост {pid})")
+                        except Exception as e:
+                            print(f"❌ Ошибка отправки админу: {e}")
+                    
+                    print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
+                    # НЕ УДАЛЯЕМ пост, просто пропускаем его в этом цикле
+                    # Пост остаётся в pending и будет снова проверен позже
                     continue
 
                 # Анонимность
@@ -452,8 +448,19 @@ def run_messenger():
                     msg_id = event.message_id if hasattr(event, 'message_id') else event.id
                     
                     # Отправляем админу (поддержка)
-                    send_to_admin(vk, user_id, msg_id, is_support=True)
-                    send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
+                    if ADMIN_ID:
+                        try:
+                            vk.messages.send(
+                                user_id=ADMIN_ID,
+                                message="📨 Новое обращение в поддержку",
+                                random_id=0,
+                                forward_messages=msg_id,
+                                group_id=GROUP_ID
+                            )
+                            send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
+                        except Exception as e:
+                            print(f"Ошибка пересылки: {e}")
+                            send_message(vk, user_id, "❌ Ошибка при отправке. Попробуйте позже.", get_main_keyboard())
                 continue
 
             if text in ["начать", "меню", "start"]:

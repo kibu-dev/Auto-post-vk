@@ -25,7 +25,7 @@ BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 PUBLISHED_FILE = "published.json"
 BAN_FILE = "bans.json"
 
-# Спам-фильтры
+# Спам-фильтры (только для слов, ссылки теперь не блокируем)
 FORBIDDEN_WORDS = [
     "реклама",
     "раскрутка",
@@ -37,14 +37,20 @@ FORBIDDEN_WORDS = [
     "крипта",
     "услуги",
 ]
-FORBIDDEN_LINKS = [
-    "t.me",
-    "telegram",
-    "instagram",
-    "wa.me",
-    "whatsapp",
-    "youtube",
-]
+
+# Функция проверки наличия любых ссылок
+def contains_any_link(text):
+    if not text:
+        return False
+    patterns = [
+        r'https?://[^\s]+',  # http:// или https://
+        r'www\.[^\s]+',      # www.
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'  # домен типа example.com
+    ]
+    for pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
 
 # База данных
 import sqlite3
@@ -245,15 +251,12 @@ def ban_user(user_id, reason):
     save_bans(bans)
 
 def is_spam(text):
-    """Проверка текста на спам."""
+    """Проверка текста на спам-слова."""
     if not text:
         return False
     text_lower = text.lower()
     for word in FORBIDDEN_WORDS:
         if word in text_lower:
-            return True
-    for link in FORBIDDEN_LINKS:
-        if link in text_lower:
             return True
     return False
 
@@ -298,10 +301,6 @@ def get_user_name(vk, user_id):
     except Exception:
         return "Пользователь", ""
 
-def make_profile_link(user_id, first_name, last_name):
-    """Создание ссылки на профиль пользователя."""
-    return f"[id{user_id}|{first_name} {last_name}]"
-
 def send_message(vk, user_id, text, keyboard=None):
     """Отправка сообщения пользователю."""
     try:
@@ -314,25 +313,32 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def send_to_admin(vk, user_id, message_text, attachments=None):
-    """Отправка сообщения администратору (только текст, если пересылка не сработала)."""
+def send_to_admin(vk, user_id, message_text, is_support=False):
+    """Отправка уведомления администратору."""
     if ADMIN_ID:
         try:
-            user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
-            user_link = make_profile_link(user_id, user_info["first_name"], user_info["last_name"])
-
-            admin_msg = f"📨 Новое сообщение в поддержку\n\n"
-            admin_msg += f"👤 От: {user_link}\n"
-            if message_text:
-                admin_msg += f"\n💬 Сообщение:\n{message_text}\n"
-
-            if attachments:
-                admin_msg += f"\n📎 Количество вложений: {len(attachments)}\n"
-
-            admin_msg += "\n✏️ Чтобы ответить, отправьте сообщение этому пользователю."
-
-            vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
-            print(f"✅ Сообщение админу отправлено (от {user_id})")
+            # Получаем имя пользователя
+            try:
+                user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
+                user_name = f"{user_info['first_name']} {user_info['last_name']}"
+            except:
+                user_name = "Пользователь"
+            
+            if is_support:
+                # Это поддержка — пересылаем сообщение
+                msg_id = message_text  # в этом параметре приходит msg_id
+                vk.messages.send(
+                    user_id=ADMIN_ID,
+                    message=f"📨 Новое обращение в поддержку",
+                    random_id=0,
+                    forward_messages=msg_id,
+                    group_id=GROUP_ID
+                )
+            else:
+                # Это модерация — отправляем текст
+                admin_msg = f"🚨 Подозрительный пост\n\nАвтор: {user_name}\n\nТекст:\n{message_text}"
+                vk.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0)
+            print(f"✅ Уведомление админу отправлено (от {user_id})")
         except Exception as e:
             print(f"❌ Ошибка отправки админу: {e}")
 
@@ -356,24 +362,34 @@ def run_publisher():
                 uid = post.get("from_id")
                 text = post.get("text", "")
 
+                # Проверка на бан
                 if is_user_banned(uid):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     continue
 
+                # Проверка на спам-слова (баним)
                 if is_spam(text):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     ban_user(uid, "Спам/Реклама")
                     continue
 
+                # Проверка на ссылки (отправляем на модерацию, не баним)
+                if contains_any_link(text):
+                    vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
+                    # Уведомляем админа
+                    send_to_admin(vk, uid, text, is_support=False)
+                    print(f"⚠️ Пост {pid} отправлен на модерацию (ссылки)")
+                    continue
+
+                # Анонимность
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
 
                 if anonymous:
-                    final = f"{clean_text}\n\n— Анонимно"
+                    final = f"{clean_text}\n\nАвтор: Аноним"
                 else:
                     first, last = get_user_name(vk, uid)
-                    profile_link = make_profile_link(uid, first, last)
-                    final = f"{clean_text}\n\n© {profile_link}"
+                    final = f"{clean_text}\n\nАвтор: {first} {last}"
 
                 attachments = build_attachments(post)
                 result = vk.wall.post(
@@ -435,28 +451,9 @@ def run_messenger():
                     # Получаем ID сообщения для пересылки
                     msg_id = event.message_id if hasattr(event, 'message_id') else event.id
                     
-                    # Получаем имя пользователя для подписи
-                    try:
-                        user_info = vk.users.get(user_ids=user_id, fields="first_name,last_name")[0]
-                        user_name = f"{user_info['first_name']} {user_info['last_name']}"
-                    except:
-                        user_name = "пользователя"
-                    
-                    # Пересылаем сообщение админу
-                    try:
-                        vk.messages.send(
-                            user_id=ADMIN_ID,
-                            message=f"📨 Пересланное сообщение в поддержку\n\nОт: [id{user_id}|{user_name}]",
-                            random_id=0,
-                            forward_messages=msg_id,
-                            group_id=GROUP_ID
-                        )
-                        send_message(vk, user_id, "✅ Сообщение переслано администратору!", get_main_keyboard())
-                    except Exception as e:
-                        print(f"Ошибка пересылки: {e}")
-                        # Если пересылка не работает, отправляем хотя бы текст
-                        send_to_admin(vk, user_id, event.text, [])
-                        send_message(vk, user_id, "✅ Сообщение отправлено администратору (только текст)", get_main_keyboard())
+                    # Отправляем админу (поддержка)
+                    send_to_admin(vk, user_id, msg_id, is_support=True)
+                    send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
                 continue
 
             if text in ["начать", "меню", "start"]:

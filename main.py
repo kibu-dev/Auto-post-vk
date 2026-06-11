@@ -300,45 +300,6 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def publish_post_from_suggestion(vk_user, post_id, uid, text):
-    """Публикует пост из предложки (только через токен пользователя)."""
-    
-    # Определяем анонимность
-    is_anon = contains_anonymous(text)
-    if is_anon:
-        final_text = f"{text}\n\nАвтор: Аноним"
-    else:
-        try:
-            user_info = vk_user.users.get(user_ids=uid, fields="first_name,last_name")[0]
-            author_link = f"[id{uid}|{user_info['first_name']} {user_info['last_name']}]"
-            final_text = f"{text}\n\nАвтор: {author_link}"
-        except:
-            final_text = f"{text}\n\nАвтор: Пользователь"
-    
-    # Получаем оригинальные вложения
-    attachments = []
-    try:
-        response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
-        for p in response.get("items", []):
-            if p["id"] == post_id:
-                attachments = build_attachments(p)
-                break
-    except:
-        pass
-    
-    # Публикуем через токен пользователя
-    result = vk_user.wall.post(
-        owner_id=-GROUP_ID,
-        message=final_text,
-        attachments=attachments,
-        from_group=1
-    )
-    
-    # Удаляем из предложок
-    vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
-    
-    return result["post_id"]
-
 # Публикатор
 def run_publisher():
     vk = vk_api.VkApi(token=USER_TOKEN).get_api()
@@ -386,7 +347,7 @@ def run_publisher():
                                     author_text = f"Автор: {user_name}"
                                 
                                 post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
-                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}\n\nДля публикации отправьте: /publish {pid}"
+                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}\n\n{post_link}"
                                 
                                 vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
                                 vk_group.messages.send(
@@ -456,43 +417,6 @@ def run_messenger():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
             text = event.text.strip().lower() if event.text else ""
-
-            # Команда /publish (только для админа)
-            if user_id == ADMIN_ID and text.startswith("/publish "):
-                try:
-                    post_id = int(text.split()[1])
-                    response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
-                    post = None
-                    for p in response.get("items", []):
-                        if p["id"] == post_id:
-                            post = p
-                            break
-                    
-                    if post:
-                        uid = post.get("from_id")
-                        post_text = post.get("text", "")
-                        
-                        new_post_id = publish_post_from_suggestion(vk_user, post_id, uid, post_text)
-                        
-                        clean_text = remove_keywords(post_text)
-                        add_post(uid, new_post_id, clean_text)
-                        
-                        send_message(vk, user_id, f"✅ Пост #{post_id} опубликован!", get_main_keyboard())
-                        
-                        mod = load_moderation()
-                        if post_id in mod["sent"]:
-                            mod["sent"].remove(post_id)
-                            save_moderation(mod)
-                    else:
-                        send_message(vk, user_id, f"❌ Пост #{post_id} не найден в предложках", get_main_keyboard())
-                except Exception as e:
-                    send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
-                continue
-
-            if user_id == ADMIN_ID and text == "/help":
-                help_msg = "🔧 Команды администратора:\n\n/publish {id} - опубликовать пост из предложок\n\nID поста берётся из уведомления о подозрительном посте"
-                send_message(vk, user_id, help_msg, get_main_keyboard())
-                continue
 
             ban_info = get_ban_info(user_id)
             if ban_info:

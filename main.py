@@ -309,8 +309,8 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def publish_post_from_suggestion(vk, vk_group, post_id, uid, text):
-    """Публикует пост из предложки (ссылки НЕ удаляются, добавляется подпись)."""
+def publish_post_from_suggestion(vk, vk_user, post_id, uid, text):
+    """Публикует пост из предложки (используя токен пользователя)."""
     
     # Определяем анонимность
     is_anon = contains_anonymous(text)
@@ -318,7 +318,7 @@ def publish_post_from_suggestion(vk, vk_group, post_id, uid, text):
         final_text = f"{text}\n\nАвтор: Аноним"
     else:
         try:
-            user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
+            user_info = vk_user.users.get(user_ids=uid, fields="first_name,last_name")[0]
             author_link = f"[id{uid}|{user_info['first_name']} {user_info['last_name']}]"
             final_text = f"{text}\n\nАвтор: {author_link}"
         except:
@@ -327,7 +327,7 @@ def publish_post_from_suggestion(vk, vk_group, post_id, uid, text):
     # Получаем оригинальные вложения
     attachments = []
     try:
-        response = vk.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
+        response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
         for p in response.get("items", []):
             if p["id"] == post_id:
                 attachments = build_attachments(p)
@@ -335,8 +335,8 @@ def publish_post_from_suggestion(vk, vk_group, post_id, uid, text):
     except:
         pass
     
-    # Публикуем
-    result = vk_group.wall.post(
+    # Публикуем через токен пользователя (vk_user)
+    result = vk_user.wall.post(
         owner_id=-GROUP_ID,
         message=final_text,
         attachments=attachments,
@@ -458,10 +458,6 @@ def run_messenger():
     vk_user_session = vk_api.VkApi(token=USER_TOKEN, api_version="5.131")
     vk_user = vk_user_session.get_api()
 
-    # Сессия для публикации от имени сообщества (для модерации)
-    vk_group_session = vk_api.VkApi(token=GROUP_TOKEN, api_version="5.131")
-    vk_group = vk_group_session.get_api()
-
     longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, mode=2, preload_messages=True)
 
     print("🤖 ЛС бот запущен")
@@ -478,11 +474,10 @@ def run_messenger():
                     payload_data = json.loads(payload) if isinstance(payload, str) else payload
                     
                     # Кнопки модерации (только для админа)
-                    if user_id == ADMIN_ID:
+                    if user_id == ADMIN_ID and payload_data.get("action") in ["approve", "reject"]:
                         if payload_data.get("action") == "approve":
                             post_id = payload_data.get("post_id")
                             try:
-                                # Получаем пост из предложок
                                 response = vk.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
                                 post = None
                                 for p in response.get("items", []):
@@ -494,16 +489,13 @@ def run_messenger():
                                     uid = post.get("from_id")
                                     post_text = post.get("text", "")
                                     
-                                    # Публикуем пост (ссылки НЕ удаляются)
-                                    new_post_id = publish_post_from_suggestion(vk, vk_group, post_id, uid, post_text)
+                                    new_post_id = publish_post_from_suggestion(vk, vk_user, post_id, uid, post_text)
                                     
-                                    # Сохраняем в статистику
                                     clean_text = remove_keywords(post_text)
                                     add_post(uid, new_post_id, clean_text)
                                     
                                     send_message(vk, user_id, f"✅ Пост #{post_id} опубликован!", get_main_keyboard())
                                     
-                                    # Удаляем из списка модерации
                                     mod = load_moderation()
                                     if post_id in mod["sent"]:
                                         mod["sent"].remove(post_id)
@@ -520,7 +512,6 @@ def run_messenger():
                                 vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
                                 send_message(vk, user_id, f"❌ Пост #{post_id} удалён из предложок", get_main_keyboard())
                                 
-                                # Удаляем из списка модерации
                                 mod = load_moderation()
                                 if post_id in mod["sent"]:
                                     mod["sent"].remove(post_id)
@@ -528,8 +519,40 @@ def run_messenger():
                             except Exception as e:
                                 send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
                             continue
-                except:
-                    pass
+                    
+                    # Кнопки обычных пользователей (удаление поста)
+                    elif payload_data.get("action") == "confirm_delete":
+                        post_id = payload_data.get("post_id")
+                        if get_post_author(post_id) == user_id:
+                            try:
+                                vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+                                delete_user_post(user_id, post_id)
+                                send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
+                            except Exception as e:
+                                send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
+                        else:
+                            send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                        continue
+                    
+                    elif payload_data.get("action") == "cancel":
+                        selected_post_for_delete.pop(user_id, None)
+                        send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
+                        continue
+                    
+                    elif payload_data.get("action") == "back":
+                        send_message(vk, user_id, "Главное меню:", get_main_keyboard())
+                        continue
+                    
+                    elif payload_data.get("post_id"):
+                        post_id = payload_data.get("post_id")
+                        if get_post_author(post_id) == user_id:
+                            send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard())
+                        else:
+                            send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                        continue
+                        
+                except Exception as e:
+                    print(f"Ошибка обработки payload: {e}")
 
             ban_info = get_ban_info(user_id)
             if ban_info:

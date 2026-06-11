@@ -301,6 +301,45 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
+def publish_post_from_suggestion(vk, vk_user, post_id, uid, text):
+    """Публикует пост из предложки (ссылки НЕ удаляются, добавляется подпись)."""
+    
+    # Определяем анонимность
+    is_anon = contains_anonymous(text)
+    if is_anon:
+        final_text = f"{text}\n\nАвтор: Аноним"
+    else:
+        try:
+            user_info = vk_user.users.get(user_ids=uid, fields="first_name,last_name")[0]
+            author_link = f"[id{uid}|{user_info['first_name']} {user_info['last_name']}]"
+            final_text = f"{text}\n\nАвтор: {author_link}"
+        except:
+            final_text = f"{text}\n\nАвтор: Пользователь"
+    
+    # Получаем оригинальные вложения
+    attachments = []
+    try:
+        response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
+        for p in response.get("items", []):
+            if p["id"] == post_id:
+                attachments = build_attachments(p)
+                break
+    except:
+        pass
+    
+    # Публикуем через токен пользователя (vk_user)
+    result = vk_user.wall.post(
+        owner_id=-GROUP_ID,
+        message=final_text,
+        attachments=attachments,
+        from_group=1,
+    )
+    
+    # Удаляем из предложок
+    vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+    
+    return result["post_id"]
+
 # Публикатор
 def run_publisher():
     vk = vk_api.VkApi(token=USER_TOKEN).get_api()
@@ -348,7 +387,7 @@ def run_publisher():
                                     author_text = f"Автор: {user_name}"
                                 
                                 post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
-                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\n{post_link}"
+                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}\n\nДля публикации отправьте: /publish {pid}"
                                 
                                 vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
                                 vk_group.messages.send(
@@ -419,73 +458,113 @@ def run_messenger():
             user_id = event.user_id
             text = event.text.strip().lower() if event.text else ""
 
+            # Обработка команды /publish (только для админа)
+            if user_id == ADMIN_ID and text.startswith("/publish "):
+                try:
+                    post_id = int(text.split()[1])
+                    # Получаем пост из предложок
+                    response = vk.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
+                    post = None
+                    for p in response.get("items", []):
+                        if p["id"] == post_id:
+                            post = p
+                            break
+                    
+                    if post:
+                        uid = post.get("from_id")
+                        post_text = post.get("text", "")
+                        
+                        new_post_id = publish_post_from_suggestion(vk, vk_user, post_id, uid, post_text)
+                        
+                        clean_text = remove_keywords(post_text)
+                        add_post(uid, new_post_id, clean_text)
+                        
+                        send_message(vk, user_id, f"✅ ПОСТ #{post_id} ОПУБЛИКОВАН!", get_main_keyboard())
+                        
+                        mod = load_moderation()
+                        if post_id in mod["sent"]:
+                            mod["sent"].remove(post_id)
+                            save_moderation(mod)
+                    else:
+                        send_message(vk, user_id, f"❌ ПОСТ #{post_id} НЕ НАЙДЕН В ПРЕДЛОЖКАХ", get_main_keyboard())
+                except Exception as e:
+                    send_message(vk, user_id, f"❌ ОШИБКА: {e}", get_main_keyboard())
+                continue
+
+            # Обработка команды /help (только для админа)
+            if user_id == ADMIN_ID and text == "/help":
+                help_msg = "🔧 КОМАНДЫ АДМИНИСТРАТОРА:\n\n/publish {id} - опубликовать пост из предложок\n\nID поста берётся из уведомления о подозрительном посте"
+                send_message(vk, user_id, help_msg, get_main_keyboard())
+                continue
+
             ban_info = get_ban_info(user_id)
             if ban_info:
                 send_message(
                     vk,
                     user_id,
-                    f"🚫 Вы забанены на {ban_info['hours']}ч {ban_info['minutes']}м.\nПричина: {ban_info['reason']}",
+                    f"🚫 ВЫ ЗАБАНЕНЫ НА {ban_info['hours']}Ч {ban_info['minutes']}М.\nПРИЧИНА: {ban_info['reason']}",
                 )
                 continue
 
             if user_id in waiting_support:
                 if text == "🔙 отмена" or text == "/cancel":
                     waiting_support.discard(user_id)
-                    send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
+                    send_message(vk, user_id, "❌ ОТМЕНЕНО.", get_main_keyboard())
                 else:
                     waiting_support.discard(user_id)
                     msg_id = event.message_id if hasattr(event, 'message_id') else event.id
                     
                     if ADMIN_ID:
                         try:
+                            dialog_link = f"https://vk.com/im?sel={user_id}"
                             vk.messages.send(
                                 user_id=ADMIN_ID,
-                                message="📨 Новое обращение в поддержку",
+                                message=f"📨 ОБРАЩЕНИЕ В ПОДДЕРЖКУ\n\nhttps://vk.com/im?sel={user_id}",
                                 random_id=0,
                                 forward_messages=msg_id,
                                 group_id=GROUP_ID
                             )
-                            send_message(vk, user_id, "✅ Сообщение отправлено администратору!", get_main_keyboard())
+                            send_message(vk, user_id, "✅ СООБЩЕНИЕ ОТПРАВЛЕНО АДМИНИСТРАТОРУ!", get_main_keyboard())
                         except Exception as e:
                             print(f"Ошибка пересылки: {e}")
-                            send_message(vk, user_id, "❌ Ошибка при отправке.", get_main_keyboard())
+                            send_message(vk, user_id, "❌ ОШИБКА ПРИ ОТПРАВКЕ.", get_main_keyboard())
                 continue
 
             if text in ["начать", "меню", "start"]:
                 stats = get_user_stats(user_id)
-                send_message(vk, user_id, f"👋 Добро пожаловать!\n📊 Постов: {stats['posts_count']}", get_main_keyboard())
+                send_message(vk, user_id, f"👋 ДОБРО ПОЖАЛОВАТЬ!\n📊 ПОСТОВ: {stats['posts_count']}", get_main_keyboard())
 
             elif text == "📊 моя статистика":
                 stats = get_user_stats(user_id)
                 ban_info = get_ban_info(user_id)
-                msg = f"📊 Ваша статистика\n\n📝 Постов: {stats['posts_count']}\n"
+                msg = f"📊 ВАША СТАТИСТИКА\n\n📝 ПОСТОВ: {stats['posts_count']}\n"
                 if ban_info:
-                    msg += f"\n🚫 Блокировка активна!\nОсталось: {ban_info['hours']}ч {ban_info['minutes']}м\nПричина: {ban_info['reason']}"
+                    msg += f"\n🚫 БЛОКИРОВКА АКТИВНА!\nОСТАЛОСЬ: {ban_info['hours']}Ч {ban_info['minutes']}М\nПРИЧИНА: {ban_info['reason']}"
                 else:
-                    msg += "\n✅ Блокировки отсутствуют"
+                    msg += "\n✅ БЛОКИРОВКИ ОТСУТСТВУЮТ"
                 send_message(vk, user_id, msg, get_main_keyboard())
 
             elif text == "🗑 удалить мой пост":
                 posts = get_user_posts(user_id)
                 if not posts:
-                    send_message(vk, user_id, "📭 У вас нет опубликованных постов.", get_main_keyboard())
+                    send_message(vk, user_id, "📭 У ВАС НЕТ ОПУБЛИКОВАННЫХ ПОСТОВ.", get_main_keyboard())
                 else:
-                    send_message(vk, user_id, f"📋 У вас {len(posts)} пост(ов).\nВыберите какой удалить:", get_posts_keyboard(posts))
+                    send_message(vk, user_id, f"📋 У ВАС {len(posts)} ПОСТ(ОВ).\nВЫБЕРИТЕ КАКОЙ УДАЛИТЬ:", get_posts_keyboard(posts))
 
             elif text == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
-                send_message(vk, user_id, "📝 Напишите ваше сообщение администратору.\nНажмите «Отмена» чтобы вернуться в меню.", get_cancel_keyboard())
+                send_message(vk, user_id, "📝 НАПИШИТЕ ВАШЕ СООБЩЕНИЕ АДМИНИСТРАТОРУ.\nНАЖМИТЕ «ОТМЕНА» ЧТОБЫ ВЕРНУТЬСЯ В МЕНЮ.", get_cancel_keyboard())
 
             elif text == "🔙 отмена":
-                send_message(vk, user_id, "Главное меню:", get_main_keyboard())
+                send_message(vk, user_id, "ГЛАВНОЕ МЕНЮ:", get_main_keyboard())
 
             elif text == "🔙 назад в меню":
                 selected_post_for_delete.pop(user_id, None)
-                send_message(vk, user_id, "Главное меню:", get_main_keyboard())
+                send_message(vk, user_id, "ГЛАВНОЕ МЕНЮ:", get_main_keyboard())
 
             elif text == "❌ нет":
                 selected_post_for_delete.pop(user_id, None)
-                send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
+                send_message(vk, user_id, "УДАЛЕНИЕ ОТМЕНЕНО.", get_main_keyboard())
 
             elif text == "✅ да, удалить":
                 if user_id in selected_post_for_delete:
@@ -494,14 +573,14 @@ def run_messenger():
                         try:
                             vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
                             delete_user_post(user_id, post_id)
-                            send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
+                            send_message(vk, user_id, f"✅ ПОСТ #{post_id} УДАЛЕН!", get_main_keyboard())
                             selected_post_for_delete.pop(user_id, None)
                         except Exception as e:
-                            send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
+                            send_message(vk, user_id, f"❌ ОШИБКА УДАЛЕНИЯ: {e}", get_main_keyboard())
                     else:
-                        send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                        send_message(vk, user_id, "❌ ЭТО НЕ ВАШ ПОСТ!", get_main_keyboard())
                 else:
-                    send_message(vk, user_id, "Сначала выберите пост для удаления.", get_main_keyboard())
+                    send_message(vk, user_id, "СНАЧАЛА ВЫБЕРИТЕ ПОСТ ДЛЯ УДАЛЕНИЯ.", get_main_keyboard())
 
             elif text.startswith("🗑 пост #"):
                 try:
@@ -510,23 +589,23 @@ def run_messenger():
                         post_id = int(match.group(1))
                         if get_post_author(post_id) == user_id:
                             post_link = f"https://vk.com/wall-{GROUP_ID}_{post_id}"
-                            send_message(vk, user_id, f"🔗 Ссылка на пост: {post_link}")
+                            send_message(vk, user_id, f"🔗 ССЫЛКА НА ПОСТ: {post_link}")
                             selected_post_for_delete[user_id] = post_id
-                            send_message(vk, user_id, f"⚠️ Удалить этот пост?", get_confirm_keyboard())
+                            send_message(vk, user_id, f"⚠️ УДАЛИТЬ ЭТОТ ПОСТ?", get_confirm_keyboard())
                         else:
-                            send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                            send_message(vk, user_id, "❌ ЭТО НЕ ВАШ ПОСТ!", get_main_keyboard())
                     else:
-                        send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
+                        send_message(vk, user_id, "ОШИБКА. ПОПРОБУЙТЕ СНОВА.", get_main_keyboard())
                 except Exception:
-                    send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
+                    send_message(vk, user_id, "ОШИБКА. ПОПРОБУЙТЕ СНОВА.", get_main_keyboard())
 
             else:
-                send_message(vk, user_id, "Нажмите на кнопку в меню", get_main_keyboard())
+                send_message(vk, user_id, "НАЖМИТЕ НА КНОПКУ В МЕНЮ", get_main_keyboard())
 
 # Запуск
 if __name__ == "__main__":
     init_db()
-    print("✅ База данных готова")
+    print("✅ БАЗА ДАННЫХ ГОТОВА")
 
     publisher_thread = threading.Thread(target=run_publisher, daemon=True)
     publisher_thread.start()

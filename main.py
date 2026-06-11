@@ -26,7 +26,7 @@ PUBLISHED_FILE = "published.json"
 BAN_FILE = "bans.json"
 MODERATION_FILE = "moderation.json"
 
-# Спам-фильтры (только для слов)
+# Спам-фильтры
 FORBIDDEN_WORDS = [
     "реклама",
     "раскрутка",
@@ -40,7 +40,6 @@ FORBIDDEN_WORDS = [
 ]
 
 def contains_any_link(text):
-    """Проверка наличия любых ссылок."""
     if not text:
         return False
     patterns = [
@@ -301,8 +300,8 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def publish_post_from_suggestion(vk, vk_user, post_id, uid, text):
-    """Публикует пост из предложки (ссылки НЕ удаляются, добавляется подпись)."""
+def publish_post_from_suggestion(vk_user, post_id, uid, text):
+    """Публикует пост из предложки (только через токен пользователя)."""
     
     # Определяем анонимность
     is_anon = contains_anonymous(text)
@@ -327,16 +326,16 @@ def publish_post_from_suggestion(vk, vk_user, post_id, uid, text):
     except:
         pass
     
-    # Публикуем через токен пользователя (vk_user)
+    # Публикуем через токен пользователя
     result = vk_user.wall.post(
         owner_id=-GROUP_ID,
         message=final_text,
         attachments=attachments,
-        from_group=1,
+        from_group=1
     )
     
     # Удаляем из предложок
-    vk.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+    vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
     
     return result["post_id"]
 
@@ -458,11 +457,11 @@ def run_messenger():
             user_id = event.user_id
             text = event.text.strip().lower() if event.text else ""
 
-            # Обработка команды /publish (только для админа)
+            # Команда /publish (только для админа)
             if user_id == ADMIN_ID and text.startswith("/publish "):
                 try:
                     post_id = int(text.split()[1])
-                    response = vk.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
+                    response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
                     post = None
                     for p in response.get("items", []):
                         if p["id"] == post_id:
@@ -473,7 +472,7 @@ def run_messenger():
                         uid = post.get("from_id")
                         post_text = post.get("text", "")
                         
-                        new_post_id = publish_post_from_suggestion(vk, vk_user, post_id, uid, post_text)
+                        new_post_id = publish_post_from_suggestion(vk_user, post_id, uid, post_text)
                         
                         clean_text = remove_keywords(post_text)
                         add_post(uid, new_post_id, clean_text)
@@ -514,7 +513,6 @@ def run_messenger():
                     
                     if ADMIN_ID:
                         try:
-                            # Ссылка на диалог с пользователем в группе
                             dialog_link = f"[https://vk.com/gim{GROUP_ID}?sel={user_id}|Ответить на обращение]"
                             vk.messages.send(
                                 user_id=ADMIN_ID,

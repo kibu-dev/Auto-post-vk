@@ -437,7 +437,7 @@ def run_messenger():
                     
                     if ADMIN_ID:
                         try:
-                            dialog_link = f"[https://vk.com/gim{GROUP_ID}?sel={user_id}|Ответить на обращение]"
+                            dialog_link = f"[id{user_id}|написать в группу]"
                             vk.messages.send(
                                 user_id=ADMIN_ID,
                                 message=f"📨 ОБРАЩЕНИЕ В ПОДДЕРЖКУ\n\n{dialog_link}",

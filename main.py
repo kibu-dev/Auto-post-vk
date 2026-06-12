@@ -300,6 +300,41 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
+def publish_post_from_suggestion(vk_user, post_id, uid, text):
+    """Публикует пост из предложки."""
+    
+    is_anon = contains_anonymous(text)
+    if is_anon:
+        final_text = f"{text}\n\nАвтор: Аноним"
+    else:
+        try:
+            user_info = vk_user.users.get(user_ids=uid, fields="first_name,last_name")[0]
+            author_link = f"[id{uid}|{user_info['first_name']} {user_info['last_name']}]"
+            final_text = f"{text}\n\nАвтор: {author_link}"
+        except:
+            final_text = f"{text}\n\nАвтор: Пользователь"
+    
+    attachments = []
+    try:
+        response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
+        for p in response.get("items", []):
+            if p["id"] == post_id:
+                attachments = build_attachments(p)
+                break
+    except:
+        pass
+    
+    result = vk_user.wall.post(
+        owner_id=-GROUP_ID,
+        message=final_text,
+        attachments=attachments,
+        from_group=1
+    )
+    
+    vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+    
+    return result["post_id"]
+
 # Публикатор
 def run_publisher():
     vk = vk_api.VkApi(token=USER_TOKEN).get_api()
@@ -328,7 +363,6 @@ def run_publisher():
                     ban_user(uid, "Спам/Реклама")
                     continue
 
-                # Проверка на ссылки
                 if contains_any_link(text):
                     moderation = load_moderation()
                     
@@ -369,7 +403,6 @@ def run_publisher():
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
                     continue
 
-                # Обычный пост (без ссылок) — публикуем сразу
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
 
@@ -419,6 +452,51 @@ def run_messenger():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
             text = event.text.strip().lower() if event.text else ""
+
+            # ===== КОМАНДЫ МОДЕРАЦИИ (только для админа) =====
+            if user_id == ADMIN_ID:
+                if text.startswith("!pub "):
+                    try:
+                        post_id = int(text.split()[1])
+                        response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
+                        post = None
+                        for p in response.get("items", []):
+                            if p["id"] == post_id:
+                                post = p
+                                break
+                        
+                        if post:
+                            uid = post.get("from_id")
+                            post_text = post.get("text", "")
+                            
+                            new_post_id = publish_post_from_suggestion(vk_user, post_id, uid, post_text)
+                            add_post(uid, new_post_id, remove_keywords(post_text))
+                            
+                            send_message(vk, user_id, f"✅ Пост #{post_id} опубликован!", get_main_keyboard())
+                            
+                            mod = load_moderation()
+                            if post_id in mod["sent"]:
+                                mod["sent"].remove(post_id)
+                                save_moderation(mod)
+                        else:
+                            send_message(vk, user_id, f"❌ Пост #{post_id} не найден", get_main_keyboard())
+                    except Exception as e:
+                        send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
+                    continue
+                
+                elif text.startswith("!del "):
+                    try:
+                        post_id = int(text.split()[1])
+                        vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
+                        send_message(vk, user_id, f"❌ Пост #{post_id} удалён", get_main_keyboard())
+                        
+                        mod = load_moderation()
+                        if post_id in mod["sent"]:
+                            mod["sent"].remove(post_id)
+                            save_moderation(mod)
+                    except Exception as e:
+                        send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
+                    continue
 
             ban_info = get_ban_info(user_id)
             if ban_info:

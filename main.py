@@ -145,7 +145,7 @@ def get_post_author(post_id):
     conn.close()
     return post[0] if post else None
 
-# Клавиатуры для пользователей
+# Клавиатуры
 def get_main_keyboard():
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("📊 Моя статистика", color=VkKeyboardColor.PRIMARY)
@@ -180,13 +180,6 @@ def get_back_keyboard():
 def get_cancel_keyboard():
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("🔙 Отмена", color=VkKeyboardColor.SECONDARY)
-    return keyboard
-
-# Клавиатура для модерации
-def get_moderation_keyboard(post_id):
-    keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button(f"✅ Опубликовать пост #{post_id}", color=VkKeyboardColor.POSITIVE)
-    keyboard.add_button(f"❌ Удалить пост #{post_id}", color=VkKeyboardColor.NEGATIVE)
     return keyboard
 
 # Функции работы с JSON
@@ -370,6 +363,7 @@ def run_publisher():
                     ban_user(uid, "Спам/Реклама")
                     continue
 
+                # Подозрительный пост: отправляем уведомление, но НЕ публикуем
                 if contains_any_link(text):
                     moderation = load_moderation()
                     
@@ -388,15 +382,14 @@ def run_publisher():
                                 else:
                                     author_text = f"Автор: {user_name}"
                                 
-                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}"
+                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}\n\nСсылка: https://vk.com/wall-{GROUP_ID}_{pid}"
                                 
                                 vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
                                 vk_group.messages.send(
                                     user_id=ADMIN_ID,
                                     message=admin_msg,
                                     random_id=0,
-                                    group_id=GROUP_ID,
-                                    keyboard=get_moderation_keyboard(pid).get_keyboard()
+                                    group_id=GROUP_ID
                                 )
                                 print(f"✅ Уведомление админу отправлено (пост {pid})")
                                 
@@ -410,6 +403,7 @@ def run_publisher():
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
                     continue
 
+                # Обычный пост (без ссылок) — публикуем сразу
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
 
@@ -460,49 +454,6 @@ def run_messenger():
             user_id = event.user_id
             text = event.text.strip().lower() if event.text else ""
 
-            # Обработка кнопок модерации
-            if user_id == ADMIN_ID and text.startswith("✅ опубликовать пост #"):
-                try:
-                    post_id = int(text.split("#")[1].split()[0])
-                    response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
-                    post = None
-                    for p in response.get("items", []):
-                        if p["id"] == post_id:
-                            post = p
-                            break
-                    
-                    if post:
-                        uid = post.get("from_id")
-                        post_text = post.get("text", "")
-                        
-                        new_post_id = publish_post_from_suggestion(vk_user, post_id, uid, post_text)
-                        add_post(uid, new_post_id, remove_keywords(post_text))
-                        send_message(vk, user_id, f"✅ Пост #{post_id} опубликован!", get_main_keyboard())
-                        
-                        mod = load_moderation()
-                        if post_id in mod["sent"]:
-                            mod["sent"].remove(post_id)
-                            save_moderation(mod)
-                    else:
-                        send_message(vk, user_id, f"❌ Пост #{post_id} не найден", get_main_keyboard())
-                except Exception as e:
-                    send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
-                continue
-            
-            elif user_id == ADMIN_ID and text.startswith("❌ удалить пост #"):
-                try:
-                    post_id = int(text.split("#")[1].split()[0])
-                    vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
-                    send_message(vk, user_id, f"❌ Пост #{post_id} удалён", get_main_keyboard())
-                    
-                    mod = load_moderation()
-                    if post_id in mod["sent"]:
-                        mod["sent"].remove(post_id)
-                        save_moderation(mod)
-                except Exception as e:
-                    send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
-                continue
-
             ban_info = get_ban_info(user_id)
             if ban_info:
                 send_message(
@@ -522,7 +473,6 @@ def run_messenger():
                     
                     if ADMIN_ID:
                         try:
-                            # Правильная ссылка на диалог в группе
                             dialog_link = f"https://vk.com/gim{GROUP_ID}?sel={user_id}"
                             vk.messages.send(
                                 user_id=ADMIN_ID,

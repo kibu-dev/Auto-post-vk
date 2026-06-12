@@ -3,6 +3,7 @@ import json
 import time
 import re
 import threading
+import traceback
 from datetime import datetime, timedelta
 
 import vk_api
@@ -19,7 +20,7 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "1800"))
+PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "900"))  # 15 минут
 BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 
 PUBLISHED_FILE = "published.json"
@@ -342,13 +343,14 @@ def run_publisher():
     last_publish_time = None
 
     print("🚀 Публикатор запущен")
+    print(f"⏱ Интервал между публикациями: {PUBLISH_INTERVAL // 60} мин.")
 
     while True:
         try:
             items = vk.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)["items"]
             pending = [p for p in items if p["id"] not in published["published"]]
             
-            print(f"📨 Найдено предложенных постов: {len(items)}")
+            print(f"\n📨 Найдено предложенных постов: {len(items)}")
             print(f"⏳ Ожидают публикации: {len(pending)}")
             
             # Обрабатываем все посты в очереди
@@ -413,10 +415,11 @@ def run_publisher():
                 
                 # Проверка на лимит времени между публикациями
                 if last_publish_time is not None and (time.time() - last_publish_time) < PUBLISH_INTERVAL:
-                    print(f"⏰ Ожидание интервала {PUBLISH_INTERVAL} секунд...")
-                    break  # выходим из цикла, ждём следующего раза
+                    remaining = int(PUBLISH_INTERVAL - (time.time() - last_publish_time))
+                    print(f"⏰ Ожидание интервала {PUBLISH_INTERVAL // 60} мин. Осталось {remaining // 60} мин. Пост {pid} ждёт...")
+                    continue  # пропускаем этот пост, но не выходим из цикла!
                 
-                # Обычный пост (без ссылок) — публикуем сразу
+                # Обычный пост (без ссылок) — публикуем
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
                 
@@ -558,11 +561,11 @@ def run_messenger():
             elif text_lower == "📊 моя статистика":
                 stats = get_user_stats(user_id)
                 ban_info = get_ban_info(user_id)
-                msg = f"📊 Ваша статистика\n\n📝 Постов: {stats['posts_count']}\n"
+                msg = f"📊 Ваша статистика\n📝 Постов: {stats['posts_count']}\n"
                 if ban_info:
-                    msg += f"\n🚫 Блокировка активна!\nОсталось: {ban_info['hours']}ч {ban_info['minutes']}м\nПричина: {ban_info['reason']}"
+                    msg += f"🚫 Блокировка активна!\nОсталось: {ban_info['hours']}ч {ban_info['minutes']}м\nПричина: {ban_info['reason']}"
                 else:
-                    msg += "\n✅ Блокировки отсутствуют"
+                    msg += "✅ Блокировки отсутствуют"
                 send_message(vk, user_id, msg, get_main_keyboard())
 
             elif text_lower == "🗑 удалить мой пост":
@@ -623,7 +626,6 @@ def run_messenger():
 
 # Запуск
 if __name__ == "__main__":
-    import traceback
     init_db()
     print("✅ База данных готова")
 

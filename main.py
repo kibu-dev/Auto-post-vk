@@ -300,41 +300,6 @@ def send_message(vk, user_id, text, keyboard=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def publish_post_from_suggestion(vk_user, post_id, uid, text):
-    """Публикует пост из предложки."""
-    
-    is_anon = contains_anonymous(text)
-    if is_anon:
-        final_text = f"{text}\n\nАвтор: Аноним"
-    else:
-        try:
-            user_info = vk_user.users.get(user_ids=uid, fields="first_name,last_name")[0]
-            author_link = f"[id{uid}|{user_info['first_name']} {user_info['last_name']}]"
-            final_text = f"{text}\n\nАвтор: {author_link}"
-        except:
-            final_text = f"{text}\n\nАвтор: Пользователь"
-    
-    attachments = []
-    try:
-        response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
-        for p in response.get("items", []):
-            if p["id"] == post_id:
-                attachments = build_attachments(p)
-                break
-    except:
-        pass
-    
-    result = vk_user.wall.post(
-        owner_id=-GROUP_ID,
-        message=final_text,
-        attachments=attachments,
-        from_group=1
-    )
-    
-    vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
-    
-    return result["post_id"]
-
 # Публикатор
 def run_publisher():
     vk = vk_api.VkApi(token=USER_TOKEN).get_api()
@@ -363,7 +328,7 @@ def run_publisher():
                     ban_user(uid, "Спам/Реклама")
                     continue
 
-                # Подозрительный пост: отправляем уведомление, но НЕ публикуем
+                # Проверка на ссылки
                 if contains_any_link(text):
                     moderation = load_moderation()
                     
@@ -382,7 +347,8 @@ def run_publisher():
                                 else:
                                     author_text = f"Автор: {user_name}"
                                 
-                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}\n\nСсылка: https://vk.com/wall-{GROUP_ID}_{pid}"
+                                post_link = f"https://vk.com/wall-{GROUP_ID}_{pid}?w=wall-{GROUP_ID}_{pid}"
+                                admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ\n\n{author_text}\n\nТекст:\n{text}\n\nID поста: {pid}\n\n{post_link}"
                                 
                                 vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
                                 vk_group.messages.send(

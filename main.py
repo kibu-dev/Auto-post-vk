@@ -18,8 +18,8 @@ GROUP_TOKEN = os.getenv("GROUP_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "120"))
-PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "3600"))
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
+PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "1800"))
 BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 
 PUBLISHED_FILE = "published.json"
@@ -339,7 +339,7 @@ def publish_post_from_suggestion(vk_user, post_id, uid, text):
 def run_publisher():
     vk = vk_api.VkApi(token=USER_TOKEN).get_api()
     published = load_published()
-    last_time = None
+    last_publish_time = None
 
     print("🚀 Публикатор запущен")
 
@@ -347,22 +347,30 @@ def run_publisher():
         try:
             items = vk.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)["items"]
             pending = [p for p in items if p["id"] not in published["published"]]
-
-            if pending and (last_time is None or time.time() - last_time >= PUBLISH_INTERVAL):
-                post = pending[0]
+            
+            print(f"📨 Найдено предложенных постов: {len(items)}")
+            print(f"⏳ Ожидают публикации: {len(pending)}")
+            
+            # Обрабатываем все посты в очереди
+            for post in pending:
                 pid = post["id"]
                 uid = post.get("from_id")
                 text = post.get("text", "")
-
+                
+                # Проверка на бан
                 if is_user_banned(uid):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
+                    print(f"🚫 Пост {pid} удалён (пользователь в бане)")
                     continue
-
+                
+                # Проверка на спам-слова
                 if is_spam(text):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     ban_user(uid, "Спам/Реклама")
+                    print(f"🚫 Пост {pid} удалён (спам), пользователь {uid} забанен")
                     continue
-
+                
+                # Проверка на ссылки (подозрительный пост)
                 if contains_any_link(text):
                     moderation = load_moderation()
                     
@@ -402,17 +410,23 @@ def run_publisher():
                     
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
                     continue
-
+                
+                # Проверка на лимит времени между публикациями
+                if last_publish_time is not None and (time.time() - last_publish_time) < PUBLISH_INTERVAL:
+                    print(f"⏰ Ожидание интервала {PUBLISH_INTERVAL} секунд...")
+                    break  # выходим из цикла, ждём следующего раза
+                
+                # Обычный пост (без ссылок) — публикуем сразу
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
-
+                
                 if anonymous:
                     final = f"{clean_text}\n\nАвтор: Аноним"
                 else:
                     first, last = get_user_name(vk, uid)
                     author_link = f"[id{uid}|{first} {last}]"
                     final = f"{clean_text}\n\nАвтор: {author_link}"
-
+                
                 attachments = build_attachments(post)
                 result = vk.wall.post(
                     owner_id=-GROUP_ID,
@@ -420,17 +434,18 @@ def run_publisher():
                     attachments=attachments,
                     from_group=1,
                 )
-
+                
                 vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                 published["published"].append(result["post_id"])
                 save_published(published)
                 add_post(uid, result["post_id"], clean_text)
-                last_time = time.time()
+                last_publish_time = time.time()
                 print(f"✅ Пост {pid} опубликован")
-
+            
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
             print(f"Ошибка публикатора: {e}")
+            traceback.print_exc()
             time.sleep(60)
 
 # ЛС Бот
@@ -451,7 +466,7 @@ def run_messenger():
     for event in longpoll.listen():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
-            text = event.text.strip() if event.text else ""  # НЕ переводим в нижний регистр!
+            text = event.text.strip() if event.text else ""
             
             # ===== 1. КОМАНДЫ МОДЕРАЦИИ (только для админа) =====
             if user_id == ADMIN_ID:
@@ -608,6 +623,7 @@ def run_messenger():
 
 # Запуск
 if __name__ == "__main__":
+    import traceback
     init_db()
     print("✅ База данных готова")
 

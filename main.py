@@ -451,9 +451,9 @@ def run_messenger():
     for event in longpoll.listen():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
-            text = event.text.strip().lower() if event.text else ""
-
-            # ===== КОМАНДЫ МОДЕРАЦИИ (только для админа) =====
+            text = event.text.strip() if event.text else ""  # НЕ переводим в нижний регистр!
+            
+            # ===== 1. КОМАНДЫ МОДЕРАЦИИ (только для админа) =====
             if user_id == ADMIN_ID:
                 if text.startswith("!pub "):
                     try:
@@ -498,6 +498,7 @@ def run_messenger():
                         send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
                     continue
 
+            # ===== 2. ПРОВЕРКА НА БАН =====
             ban_info = get_ban_info(user_id)
             if ban_info:
                 send_message(
@@ -507,8 +508,9 @@ def run_messenger():
                 )
                 continue
 
+            # ===== 3. ПОДДЕРЖКА (режим ожидания) =====
             if user_id in waiting_support:
-                if text == "🔙 отмена" or text == "/cancel":
+                if text.lower() in ["🔙 отмена", "/cancel"]:
                     waiting_support.discard(user_id)
                     send_message(vk, user_id, "❌ Отменено.", get_main_keyboard())
                 else:
@@ -531,11 +533,14 @@ def run_messenger():
                             send_message(vk, user_id, "❌ Ошибка при отправке.", get_main_keyboard())
                 continue
 
-            if text in ["начать", "меню", "start"]:
+            # ===== 4. ОБЫЧНЫЕ КОМАНДЫ ПОЛЬЗОВАТЕЛЕЙ =====
+            text_lower = text.lower()
+            
+            if text_lower in ["начать", "меню", "start"]:
                 stats = get_user_stats(user_id)
                 send_message(vk, user_id, f"👋 Добро пожаловать!\n📊 Постов: {stats['posts_count']}", get_main_keyboard())
 
-            elif text == "📊 моя статистика":
+            elif text_lower == "📊 моя статистика":
                 stats = get_user_stats(user_id)
                 ban_info = get_ban_info(user_id)
                 msg = f"📊 Ваша статистика\n\n📝 Постов: {stats['posts_count']}\n"
@@ -545,29 +550,29 @@ def run_messenger():
                     msg += "\n✅ Блокировки отсутствуют"
                 send_message(vk, user_id, msg, get_main_keyboard())
 
-            elif text == "🗑 удалить мой пост":
+            elif text_lower == "🗑 удалить мой пост":
                 posts = get_user_posts(user_id)
                 if not posts:
                     send_message(vk, user_id, "📭 У вас нет опубликованных постов.", get_main_keyboard())
                 else:
                     send_message(vk, user_id, f"📋 У вас {len(posts)} пост(ов).\nВыберите какой удалить:", get_posts_keyboard(posts))
 
-            elif text == "🆘 написать в поддержку":
+            elif text_lower == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
                 send_message(vk, user_id, "📝 Напишите ваше сообщение администратору.\nНажмите «Отмена» чтобы вернуться в меню.", get_cancel_keyboard())
 
-            elif text == "🔙 отмена":
+            elif text_lower == "🔙 отмена":
                 send_message(vk, user_id, "Главное меню:", get_main_keyboard())
 
-            elif text == "🔙 назад в меню":
+            elif text_lower == "🔙 назад в меню":
                 selected_post_for_delete.pop(user_id, None)
                 send_message(vk, user_id, "Главное меню:", get_main_keyboard())
 
-            elif text == "❌ нет":
+            elif text_lower == "❌ нет":
                 selected_post_for_delete.pop(user_id, None)
                 send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
 
-            elif text == "✅ да, удалить":
+            elif text_lower == "✅ да, удалить":
                 if user_id in selected_post_for_delete:
                     post_id = selected_post_for_delete[user_id]
                     if get_post_author(post_id) == user_id:
@@ -577,22 +582,20 @@ def run_messenger():
                             send_message(vk, user_id, f"✅ Пост #{post_id} удален!", get_main_keyboard())
                             selected_post_for_delete.pop(user_id, None)
                         except Exception as e:
-                            send_message(vk, user_id, f"❌ Ошибка удаления: {e}", get_main_keyboard())
+                            send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
                     else:
                         send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                 else:
-                    send_message(vk, user_id, "Сначала выберите пост для удаления.", get_main_keyboard())
+                    send_message(vk, user_id, "Сначала выберите пост.", get_main_keyboard())
 
-            elif text.startswith("🗑 пост #"):
+            elif text_lower.startswith("🗑 пост #"):
                 try:
                     match = re.search(r"#(\d+)", text)
                     if match:
                         post_id = int(match.group(1))
                         if get_post_author(post_id) == user_id:
-                            post_link = f"https://vk.com/wall-{GROUP_ID}_{post_id}"
-                            send_message(vk, user_id, f"🔗 Ссылка на пост: {post_link}")
                             selected_post_for_delete[user_id] = post_id
-                            send_message(vk, user_id, f"⚠️ Удалить этот пост?", get_confirm_keyboard())
+                            send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard())
                         else:
                             send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
                     else:

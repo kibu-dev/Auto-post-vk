@@ -182,7 +182,7 @@ def get_cancel_keyboard():
     keyboard.add_button("🔙 Отмена", color=VkKeyboardColor.SECONDARY)
     return keyboard
 
-# Клавиатура для модерации (без payload, через текст)
+# Клавиатура для модерации
 def get_moderation_keyboard(post_id):
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button(f"✅ Опубликовать пост #{post_id}", color=VkKeyboardColor.POSITIVE)
@@ -308,9 +308,8 @@ def send_message(vk, user_id, text, keyboard=None):
         print(f"Ошибка отправки: {e}")
 
 def publish_post_from_suggestion(vk_user, post_id, uid, text):
-    """Публикует пост из предложки (ссылки НЕ удаляются, добавляется подпись)."""
+    """Публикует пост из предложки."""
     
-    # Определяем анонимность
     is_anon = contains_anonymous(text)
     if is_anon:
         final_text = f"{text}\n\nАвтор: Аноним"
@@ -322,7 +321,6 @@ def publish_post_from_suggestion(vk_user, post_id, uid, text):
         except:
             final_text = f"{text}\n\nАвтор: Пользователь"
     
-    # Получаем оригинальные вложения
     attachments = []
     try:
         response = vk_user.wall.get(owner_id=-GROUP_ID, filter="suggests", count=100)
@@ -333,7 +331,6 @@ def publish_post_from_suggestion(vk_user, post_id, uid, text):
     except:
         pass
     
-    # Публикуем через токен пользователя
     result = vk_user.wall.post(
         owner_id=-GROUP_ID,
         message=final_text,
@@ -341,7 +338,6 @@ def publish_post_from_suggestion(vk_user, post_id, uid, text):
         from_group=1
     )
     
-    # Удаляем из предложок
     vk_user.wall.delete(owner_id=-GROUP_ID, post_id=post_id)
     
     return result["post_id"]
@@ -464,7 +460,7 @@ def run_messenger():
             user_id = event.user_id
             text = event.text.strip().lower() if event.text else ""
 
-            # Обработка кнопок модерации (через текст)
+            # Обработка кнопок модерации
             if user_id == ADMIN_ID and text.startswith("✅ опубликовать пост #"):
                 try:
                     post_id = int(text.split("#")[1].split()[0])
@@ -526,7 +522,8 @@ def run_messenger():
                     
                     if ADMIN_ID:
                         try:
-                            dialog_link = f"[id{user_id}|написать в группу]"
+                            # Правильная ссылка на диалог в группе
+                            dialog_link = f"https://vk.com/gim{GROUP_ID}?sel={user_id}"
                             vk.messages.send(
                                 user_id=ADMIN_ID,
                                 message=f"📨 ОБРАЩЕНИЕ В ПОДДЕРЖКУ\n\n{dialog_link}",

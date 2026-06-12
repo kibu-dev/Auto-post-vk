@@ -20,7 +20,7 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "900"))  # 15 минут
+PUBLISH_INTERVAL = int(os.getenv("PUBLISH_INTERVAL", "600"))  # 10 минут
 BAN_HOURS = int(os.getenv("BAN_HOURS", "24"))
 
 PUBLISHED_FILE = "published.json"
@@ -159,7 +159,8 @@ def get_main_keyboard():
 def get_posts_keyboard(posts):
     keyboard = VkKeyboard(one_time=True)
     for i, post in enumerate(posts[:10], 1):
-        preview = post["text"][:35] + "..." if len(post["text"]) > 35 else post["text"]
+        # Укорачиваем до 20 символов (ошибка 911 требует не более 40)
+        preview = post["text"][:20] + "..." if len(post["text"]) > 20 else post["text"]
         keyboard.add_button(f"🗑 Пост #{post['post_id']}: {preview}", color=VkKeyboardColor.SECONDARY)
         if i % 2 == 0 and i != len(posts[:10]):
             keyboard.add_line()
@@ -353,26 +354,22 @@ def run_publisher():
             print(f"\n📨 Найдено предложенных постов: {len(items)}")
             print(f"⏳ Ожидают публикации: {len(pending)}")
             
-            # Обрабатываем все посты в очереди
             for post in pending:
                 pid = post["id"]
                 uid = post.get("from_id")
                 text = post.get("text", "")
                 
-                # Проверка на бан
                 if is_user_banned(uid):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     print(f"🚫 Пост {pid} удалён (пользователь в бане)")
                     continue
                 
-                # Проверка на спам-слова
                 if is_spam(text):
                     vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                     ban_user(uid, "Спам/Реклама")
                     print(f"🚫 Пост {pid} удалён (спам), пользователь {uid} забанен")
                     continue
                 
-                # Проверка на ссылки (подозрительный пост)
                 if contains_any_link(text):
                     moderation = load_moderation()
                     
@@ -413,13 +410,11 @@ def run_publisher():
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
                     continue
                 
-                # Проверка на лимит времени между публикациями
                 if last_publish_time is not None and (time.time() - last_publish_time) < PUBLISH_INTERVAL:
                     remaining = int(PUBLISH_INTERVAL - (time.time() - last_publish_time))
                     print(f"⏰ Ожидание интервала {PUBLISH_INTERVAL // 60} мин. Осталось {remaining // 60} мин. Пост {pid} ждёт...")
-                    continue  # пропускаем этот пост, но не выходим из цикла!
+                    continue
                 
-                # Обычный пост (без ссылок) — публикуем
                 anonymous = contains_anonymous(text)
                 clean_text = remove_keywords(text)
                 
@@ -471,7 +466,7 @@ def run_messenger():
             user_id = event.user_id
             text = event.text.strip() if event.text else ""
             
-            # ===== 1. КОМАНДЫ МОДЕРАЦИИ (только для админа) =====
+            # ===== 1. КОМАНДЫ МОДЕРАЦИИ =====
             if user_id == ADMIN_ID:
                 if text.startswith("!pub "):
                     try:
@@ -526,7 +521,7 @@ def run_messenger():
                 )
                 continue
 
-            # ===== 3. ПОДДЕРЖКА (режим ожидания) =====
+            # ===== 3. ПОДДЕРЖКА =====
             if user_id in waiting_support:
                 if text.lower() in ["🔙 отмена", "/cancel"]:
                     waiting_support.discard(user_id)
@@ -551,7 +546,7 @@ def run_messenger():
                             send_message(vk, user_id, "❌ Ошибка при отправке.", get_main_keyboard())
                 continue
 
-            # ===== 4. ОБЫЧНЫЕ КОМАНДЫ ПОЛЬЗОВАТЕЛЕЙ =====
+            # ===== 4. ОБЫЧНЫЕ КОМАНДЫ =====
             text_lower = text.lower()
             
             if text_lower in ["начать", "меню", "start"]:

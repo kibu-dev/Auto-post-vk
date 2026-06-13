@@ -57,7 +57,7 @@ def load_moderation():
 def save_moderation(data):
     save_json_file(MODERATION_FILE, data)
 
-# Функция проверки на спам-слова (из файла)
+# Функция проверки на спам-слова
 def is_spam(text):
     if not text:
         return False
@@ -82,21 +82,13 @@ def contains_any_link(text):
             return True
     return False
 
-# Анонимность
+# Анонимность (только проверка, без удаления)
 def contains_anonymous(text):
     keywords = ["анон", "анонимно", "аноним", "#анон", "#анонимно", "#аноним"]
     for kw in keywords:
         if kw in text.lower():
             return True
     return False
-
-def remove_keywords(text):
-    keywords = ["анон", "анонимно", "аноним", "#анон", "#анонимно", "#аноним"]
-    cleaned = text
-    for kw in keywords:
-        cleaned = cleaned.replace(kw, "").replace(kw.upper(), "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
 
 def build_attachments(post):
     attachments = []
@@ -132,8 +124,11 @@ def send_message(vk, user_id, text, keyboard=None):
         print(f"Ошибка отправки: {e}")
 
 def publish_post_from_suggestion(vk_user, post_id, uid, text):
+    # Проверяем, есть ли ключевые слова анонимности
     is_anon = contains_anonymous(text)
+    
     if is_anon:
+        # Текст НЕ изменяем, просто добавляем подпись в конце
         final_text = f"{text}\n\nАвтор: Аноним"
     else:
         try:
@@ -219,7 +214,7 @@ def run_publisher():
                 uid = post.get("from_id")
                 text = post.get("text", "")
                 
-                # Проверка на спам-слова (один раз, как для ссылок)
+                # Проверка на спам-слова
                 if is_spam(text):
                     moderation = load_moderation()
                     
@@ -244,7 +239,7 @@ def run_publisher():
                     print(f"⚠️ Пост {pid} содержит запрещённые слова, оставлен на модерацию")
                     continue
                 
-                # Проверка на ссылки (подозрительный пост)
+                # Проверка на ссылки
                 if contains_any_link(text):
                     moderation = load_moderation()
                     
@@ -280,16 +275,15 @@ def run_publisher():
                     print(f"⏰ Ожидание интервала {PUBLISH_INTERVAL // 60} мин. Осталось {remaining // 60} мин. Пост {pid} ждёт...")
                     continue
                 
-                # Обычный пост — публикуем
+                # Обычный пост — публикуем (НЕ удаляем ключевые слова)
                 anonymous = contains_anonymous(text)
-                clean_text = remove_keywords(text)
                 
                 if anonymous:
-                    final = f"{clean_text}\n\nАвтор: Аноним"
+                    final = f"{text}\n\nАвтор: Аноним"
                 else:
                     first, last = get_user_name(vk, uid)
                     author_link = f"[id{uid}|{first} {last}]"
-                    final = f"{clean_text}\n\nАвтор: {author_link}"
+                    final = f"{text}\n\nАвтор: {author_link}"
                 
                 attachments = build_attachments(post)
                 result = vk.wall.post(owner_id=-GROUP_ID, message=final, attachments=attachments, from_group=1)
@@ -297,7 +291,7 @@ def run_publisher():
                 vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                 published["published"].append(result["post_id"])
                 save_published(published)
-                add_post(uid, result["post_id"], clean_text)
+                add_post(uid, result["post_id"], text)
                 last_publish_time = time.time()
                 print(f"✅ Пост {pid} опубликован")
             
@@ -340,7 +334,7 @@ def run_messenger():
                             uid = post.get("from_id")
                             post_text = post.get("text", "")
                             new_post_id = publish_post_from_suggestion(vk_user, post_id, uid, post_text)
-                            add_post(uid, new_post_id, remove_keywords(post_text))
+                            add_post(uid, new_post_id, post_text)
                             send_message(vk, user_id, f"✅ Пост #{post_id} опубликован!", get_main_keyboard())
                             mod = load_moderation()
                             if post_id in mod["sent"]:
@@ -434,7 +428,6 @@ def run_messenger():
 
             elif text_lower == "🗑 удалить мой пост":
                 posts = get_user_posts(user_id)
-                print(f"DEBUG: Найдено постов у {user_id}: {len(posts)}")
                 if not posts:
                     send_message(vk, user_id, "📭 У вас нет опубликованных постов.", get_main_keyboard())
                 else:

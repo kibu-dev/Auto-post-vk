@@ -174,7 +174,7 @@ def get_posts_keyboard(posts):
     keyboard = VkKeyboard(one_time=True)
     for i, post in enumerate(posts[:10], 1):
         preview = post["text"][:20] + "..." if len(post["text"]) > 20 else post["text"]
-        keyboard.add_button(f"🗑 Пост #{post['post_id']}: {preview}", color=VkKeyboardColor.SECONDARY)
+        keyboard.add_button(f"🗑 {i}. Пост #{post['post_id']}: {preview}", color=VkKeyboardColor.SECONDARY)
         if i % 2 == 0 and i != len(posts[:10]):
             keyboard.add_line()
     keyboard.add_line()
@@ -297,6 +297,7 @@ def run_publisher():
                 vk.wall.delete(owner_id=-GROUP_ID, post_id=pid)
                 published["published"].append(result["post_id"])
                 save_published(published)
+                add_post(uid, result["post_id"], clean_text)
                 last_publish_time = time.time()
                 print(f"✅ Пост {pid} опубликован")
             
@@ -339,6 +340,7 @@ def run_messenger():
                             uid = post.get("from_id")
                             post_text = post.get("text", "")
                             new_post_id = publish_post_from_suggestion(vk_user, post_id, uid, post_text)
+                            add_post(uid, new_post_id, remove_keywords(post_text))
                             send_message(vk, user_id, f"✅ Пост #{post_id} опубликован!", get_main_keyboard())
                             mod = load_moderation()
                             if post_id in mod["sent"]:
@@ -432,10 +434,12 @@ def run_messenger():
 
             elif text_lower == "🗑 удалить мой пост":
                 posts = get_user_posts(user_id)
+                print(f"DEBUG: Найдено постов у {user_id}: {len(posts)}")
                 if not posts:
                     send_message(vk, user_id, "📭 У вас нет опубликованных постов.", get_main_keyboard())
                 else:
-                    send_message(vk, user_id, f"📋 У вас {len(posts)} пост(ов).\nВыберите какой удалить:", get_posts_keyboard(posts))
+                    keyboard = get_posts_keyboard(posts)
+                    send_message(vk, user_id, f"📋 У вас {len(posts)} пост(ов).\nВыберите какой удалить:", keyboard)
 
             elif text_lower == "🆘 написать в поддержку":
                 waiting_support.add(user_id)
@@ -453,7 +457,7 @@ def run_messenger():
                 send_message(vk, user_id, "Удаление отменено.", get_main_keyboard())
 
             elif text_lower == "✅ да, удалить":
-                if user_id in selected_post_for_delete:
+                if user_id in selected_post_for_delete and selected_post_for_delete[user_id]:
                     post_id = selected_post_for_delete[user_id]
                     if get_post_author(post_id) == user_id:
                         try:
@@ -468,20 +472,23 @@ def run_messenger():
                 else:
                     send_message(vk, user_id, "Сначала выберите пост.", get_main_keyboard())
 
-            elif text_lower.startswith("🗑 пост #"):
+            elif text_lower.startswith("🗑 ") and text_lower != "🗑 удалить мой пост":
                 try:
-                    match = re.search(r"#(\d+)", text)
+                    match = re.search(r"🗑 (\d+)\.", text)
                     if match:
-                        post_id = int(match.group(1))
-                        if get_post_author(post_id) == user_id:
+                        idx = int(match.group(1)) - 1
+                        posts = get_user_posts(user_id)
+                        if 0 <= idx < len(posts):
+                            post_id = posts[idx]['post_id']
                             selected_post_for_delete[user_id] = post_id
                             send_message(vk, user_id, f"⚠️ Удалить пост #{post_id}?", get_confirm_keyboard())
                         else:
-                            send_message(vk, user_id, "❌ Это не ваш пост!", get_main_keyboard())
+                            send_message(vk, user_id, "❌ Пост не найден", get_main_keyboard())
                     else:
-                        send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
-                except Exception:
-                    send_message(vk, user_id, "Ошибка. Попробуйте снова.", get_main_keyboard())
+                        send_message(vk, user_id, "❌ Ошибка", get_main_keyboard())
+                except Exception as e:
+                    send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
+                continue
 
             else:
                 send_message(vk, user_id, "Нажмите на кнопку в меню", get_main_keyboard())

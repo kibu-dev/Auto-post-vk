@@ -219,19 +219,29 @@ def run_publisher():
                 uid = post.get("from_id")
                 text = post.get("text", "")
                 
-                # Проверка на спам-слова (только уведомление)
+                # Проверка на спам-слова (один раз, как для ссылок)
                 if is_spam(text):
-                    if ADMIN_ID:
-                        try:
-                            user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
-                            user_name = f"{user_info['first_name']} {user_info['last_name']}"
-                        except:
-                            user_name = "Неизвестный"
-                        
-                        admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ (запрещённые слова)\n\nАвтор: {user_name}\n\nТекст:\n{text}\n\nID поста: {pid}"
-                        vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
-                        vk_group.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0, group_id=GROUP_ID)
-                    print(f"⚠️ Пост {pid} содержит запрещённые слова, уведомление админу")
+                    moderation = load_moderation()
+                    
+                    if pid not in moderation["sent"]:
+                        if ADMIN_ID:
+                            try:
+                                user_info = vk.users.get(user_ids=uid, fields="first_name,last_name")[0]
+                                user_name = f"{user_info['first_name']} {user_info['last_name']}"
+                            except:
+                                user_name = "Неизвестный"
+                            
+                            admin_msg = f"🚨 ПОДОЗРИТЕЛЬНЫЙ ПОСТ (запрещённые слова)\n\nАвтор: {user_name}\n\nТекст:\n{text}\n\nID поста: {pid}"
+                            vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
+                            vk_group.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0, group_id=GROUP_ID)
+                            print(f"✅ Уведомление админу отправлено (пост {pid}, спам-слова)")
+                            
+                            moderation["sent"].append(pid)
+                            save_moderation(moderation)
+                    else:
+                        print(f"⚠️ Пост {pid} уже отправлен на модерацию (спам-слова)")
+                    
+                    print(f"⚠️ Пост {pid} содержит запрещённые слова, оставлен на модерацию")
                     continue
                 
                 # Проверка на ссылки (подозрительный пост)
@@ -254,12 +264,12 @@ def run_publisher():
                             
                             vk_group = vk_api.VkApi(token=GROUP_TOKEN, api_version='5.131').get_api()
                             vk_group.messages.send(user_id=ADMIN_ID, message=admin_msg, random_id=0, group_id=GROUP_ID)
-                            print(f"✅ Уведомление админу отправлено (пост {pid})")
+                            print(f"✅ Уведомление админу отправлено (пост {pid}, ссылки)")
                             
                             moderation["sent"].append(pid)
                             save_moderation(moderation)
                     else:
-                        print(f"⚠️ Пост {pid} уже отправлен на модерацию")
+                        print(f"⚠️ Пост {pid} уже отправлен на модерацию (ссылки)")
                     
                     print(f"⚠️ Пост {pid} содержит ссылки, оставлен на модерацию")
                     continue
@@ -353,12 +363,12 @@ def run_messenger():
                         send_message(vk, user_id, f"❌ Ошибка: {e}", get_main_keyboard())
                     continue
                 
-                # Упрощённые команды для слов
-                elif text.startswith("+"):
+                # Команды для управления запрещёнными словами
+                elif text.startswith("!addw "):
                     try:
-                        new_word = text[1:].strip().lower()
+                        new_word = text[6:].strip().lower()
                         if not new_word:
-                            send_message(vk, user_id, f"❌ Введите слово после +", get_main_keyboard())
+                            send_message(vk, user_id, f"❌ Формат: !addw слово", get_main_keyboard())
                         else:
                             words = load_forbidden_words()
                             if new_word not in words:
@@ -371,11 +381,11 @@ def run_messenger():
                         send_message(vk, user_id, f"❌ Ошибка", get_main_keyboard())
                     continue
                 
-                elif text.startswith("-"):
+                elif text.startswith("!delw "):
                     try:
-                        del_word = text[1:].strip().lower()
+                        del_word = text[6:].strip().lower()
                         if not del_word:
-                            send_message(vk, user_id, f"❌ Введите слово после -", get_main_keyboard())
+                            send_message(vk, user_id, f"❌ Формат: !delw слово", get_main_keyboard())
                         else:
                             words = load_forbidden_words()
                             if del_word in words:
@@ -388,7 +398,7 @@ def run_messenger():
                         send_message(vk, user_id, f"❌ Ошибка", get_main_keyboard())
                     continue
                 
-                elif text == "?слова":
+                elif text == "!listw":
                     words = load_forbidden_words()
                     if words:
                         msg = "📋 Запрещённые слова:\n" + ", ".join(words)
